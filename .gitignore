@@ -1,0 +1,17 @@
+# Tool / harness state (never commit)
+.agents/
+.workbuddy/
+
+# Node
+node_modules/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?
+
+# Logs
+logs
+*.log

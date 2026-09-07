@@ -1,0 +1,60 @@
+/**
+ * 时间线主列宽度修正（宽时间线开关，见 timeline-width.ts）。
+ *
+ * 1. 开关：`html[data-te-timeline='wide']` —— 开启后才放宽主列，关闭时完全交回 X 原生布局。
+ * 2. 主列宽度取 CSS 变量 `--te-timeline-width`（由 JS 按视口可用空间动态写入，不一定是 800）。
+ * 3. 解锁器命中的元素（data-te-width-unlocked）同样只在开启时放开，避免关闭后观感不一致。
+ */
+
+:root {
+  --te-timeline-width: 600px;
+}
+
+/*
+ * 只在「宽时间线」开启时放大主列。
+ * 右栏显示时三栏空间紧张，宽度由 timeline-width.ts 按可用空间收敛（600–800），
+ * 并把三栏行 min-width 撑开，因此不会出现主列吃掉右栏间隙或溢出的情况。
+ */
+@media (min-width: 1095px) {
+  /* 主列 */
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] {
+    width: var(--te-timeline-width) !important;
+    min-width: 0 !important;
+    max-width: var(--te-timeline-width) !important;
+  }
+
+  /* 主列内部容器：放开 X 自带的 600px 上限，让内容跟随主列铺满 */
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] > div {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* 时间线 / 推文容器：X 给这些节点写死了 max-width，逐个放开 */
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] [data-testid='cellInnerDiv'],
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] [data-testid='tweet'],
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] article,
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] [aria-label*='Timeline'],
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] [aria-label*='时间线'],
+  html[data-te-timeline='wide'] div[data-testid='primaryColumn'] [role='region'] > div > div {
+    max-width: 100% !important;
+  }
+
+  /* 右栏：保底宽度，避免被撑宽的主列挤压 */
+  html[data-te-timeline='wide'] div[data-testid='sidebarColumn'] {
+    min-width: 290px !important;
+  }
+}
+
+/*
+ * 兜底：X 用 hashed class（css-xxxx）给容器写死宽度，选择器无法稳定命中。
+ * 由 unlock-width.ts 在运行时按「计算后的固定宽度值」识别并解除，
+ * 命中的元素会被打上该属性，这里统一把宽度属性指向 100%（仅宽时间线开启时）。
+ */
+html[data-te-timeline='wide'] [data-te-width-unlocked] {
+  max-width: 100% !important;
+}
+
+html[data-te-timeline='wide'] [data-te-width-unlocked='fixed'] {
+  width: 100% !important;
+  min-width: 0 !important;
+}
