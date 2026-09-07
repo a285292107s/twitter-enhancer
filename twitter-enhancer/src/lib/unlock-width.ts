@@ -1,13 +1,25 @@
 /**
- * 宽度解锁器。
+ * 宽度解锁器（性能版）。
  *
- * 问题：X 用哈希 class（css-xxxx）给时间线 / 推文容器写死 `max-width: 600px`，
- * 选择器无法稳定命中，且不同页面（首页、推文详情、用户主页）的层级各不相同。
+ * 旧实现的问题：每次 mutation 冲刷时都对容器做一次 `querySelectorAll('*')`
+ * 全量扫描（可达数千节点），并对每个节点调用 getComputedStyle —— 这在 X 的
+ * 虚拟滚动（React Virtualized）下会造成明显的 Layout Thrashing 与滚动掉帧。
  *
- * 方案：不猜选择器，直接按「计算后的固定宽度值」识别被锁死的容器，
- * 给它打上 `data-te-width-unlocked` 属性，由 CSS 统一把宽度放开到 100%。
- * 这样即使 X 改 class 名或调整 DOM 层级，只要限宽值不变，脚本依然生效。
+ * 新方案：
+ * 1. 优先用纯 CSS 覆盖（timeline-width.css 已按 data-testid 放开主列内部容器），
+ *    本模块只处理 CSS 覆盖不到的「哈希 class 写死宽度」兜底；
+ * 2. 不再自己注册 MutationObserver —— 增量节点来自 dom-watch 单例共享池；
+ * 3. 全量扫描只发生一次（容器首现 / 宽度显著变化时），此后只增量检视新增节点，
+ *    绝不重扫已扫过的整棵子树；
+ * 4. 待检元素维护为队列，每帧只处理一个时间片（sliceSize 个）后让出主线程，
+ *    处理元素时把其子元素入队 —— 不产生一次性大数组，不会单帧卡死滚动；
+ * 5. 队列长度有上限（防虚拟滚动下无界增长），后台 rAF 冻结由 visibilitychange
+ *    与 dom-watch 的兜底冲刷覆盖；
+ * 6. 只在元素写死宽（560–660px 且明显窄于容器）时打 data-te-width-unlocked，
+ *    由 CSS 放开到 100%。
  */
+
+import { onDomChanged } from './dom-watch';
 
 /** 打在元素上的标记属性名（data-te-width-unlocked） */
 const FLAG = 'teWidthUnlocked';
@@ -17,8 +29,10 @@ export interface UnlockOptions {
   lockedRange?: [number, number];
   /** 容器宽度与元素宽度的差值超过该值才处理，避免误伤宽度接近容器正常元素 */
   tolerance?: number;
-  /** 单次扫描的最大元素数，超出则只处理前 N 个，防止长列表卡顿 */
-  maxScan?: number;
+  /** 单帧最多处理的元素数（时间片大小，越小越不抢主线程，完成越慢） */
+  sliceSize?: number;
+  /** 待检队列上限，防止虚拟滚动下无界增长 */
+  maxQueue?: number;
 }
 
 /** 判断某个计算值是否为「写死的像素宽度且明显窄于容器」 */
@@ -30,38 +44,44 @@ function isLockedValue(value: string, containerWidth: number, opts: Required<Unl
   return n >= min && n <= max && containerWidth - n >= opts.tolerance;
 }
 
-/**
- * 创建一个容器宽度解锁器。
- * @param containerSelector 需要解锁的容器（如时间线主列）选择器
- */
 export function createWidthUnlocker(containerSelector: string, options: UnlockOptions = {}) {
   const opts: Required<UnlockOptions> = {
     lockedRange: options.lockedRange ?? [560, 660],
     tolerance: options.tolerance ?? 40,
-    maxScan: options.maxScan ?? 4000,
+    sliceSize: options.sliceSize ?? 300,
+    maxQueue: options.maxQueue ?? 8000,
   };
 
-  /** 已被处理过的元素，重置时用于清除标记（元素可能已被移除，故存放强引用后过滤） */
+  /** 已被处理过的元素（强引用；重置时用于清除标记） */
   let touched: HTMLElement[] = [];
   let container: HTMLElement | null = null;
-  let pending: Node[] = [];
+  /** 待检队列 */
+  let queue: Element[] = [];
   let scheduled = false;
   let resizeObserver: ResizeObserver | null = null;
-  /** 是否已完成过一次覆盖整个容器的扫描（容器更换后需重新置为 false） */
-  let fullScanDone = false;
+  let unsubscribe: (() => void) | null = null;
+  let resizeHandler: (() => void) | null = null;
+  let visibilityHandler: (() => void) | null = null;
+  let domContentLoadedHandler: (() => void) | null = null;
+  /** 上次完成全量扫描时的容器宽度 */
+  let scannedWidth = -1;
+  let stopped = false;
 
-  /** 清除所有已打标记，使后续可重新计算（例如容器宽度变化后） */
+  /** 清除所有已打标记，使后续可重新计算 */
   function reset(): void {
     for (const el of touched) {
       delete el.dataset[FLAG];
     }
     touched = [];
-    // 容器变化后原有判定失效，需要重新做一次全量扫描
-    fullScanDone = false;
+    queue = [];
+    scannedWidth = -1;
   }
 
-  function unlock(el: HTMLElement, containerWidth: number): void {
-    if (el.dataset[FLAG]) return;
+  function unlock(el: Element): void {
+    if (!(el instanceof HTMLElement)) return;
+    if (el.dataset[FLAG] || !container) return;
+    const containerWidth = container.clientWidth;
+    if (containerWidth <= 0) return;
     const style = getComputedStyle(el);
     const widthLocked = isLockedValue(style.width, containerWidth, opts);
     const maxLocked = isLockedValue(style.maxWidth, containerWidth, opts);
@@ -70,92 +90,129 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
     touched.push(el);
   }
 
-  function scan(root: ParentNode, containerWidth: number): void {
-    const targets: HTMLElement[] = [];
-    if (root instanceof HTMLElement) targets.push(root);
-    targets.push(...root.querySelectorAll<HTMLElement>('*'));
-    const limit = Math.min(targets.length, opts.maxScan);
-    for (let i = 0; i < limit; i += 1) {
-      unlock(targets[i], containerWidth);
-    }
+  function enqueue(el: Element): void {
+    if (queue.length >= opts.maxQueue) return;
+    queue.push(el);
   }
 
-  /** 主流程：确保容器存在 → 扫描容器本身 + 待处理的新增节点 */
-  function flush(): void {
+  /** 处理一个时间片：检视队首若干元素，再把其子元素入队（BFS） */
+  function workSlice(): void {
     scheduled = false;
+    if (stopped) return;
+    const c = ensureContainer();
+    if (!c) return;
+    const containerWidth = c.clientWidth;
+    if (containerWidth <= 0) return;
 
-    if (!container || !container.isConnected) {
-      container = document.querySelector<HTMLElement>(containerSelector);
-      if (!container) return;
-      reset();
-      resizeObserver?.disconnect();
-      if (typeof ResizeObserver !== 'undefined') {
-        resizeObserver = new ResizeObserver(() => {
-          if (!container) return;
-          reset();
-          scan(container, container.clientWidth);
-        });
-        resizeObserver.observe(container);
+    let processed = 0;
+    while (queue.length > 0 && processed < opts.sliceSize) {
+      const el = queue.shift()!;
+      if (!el.isConnected) continue; // 虚拟滚动已移除的节点直接跳过
+      unlock(el);
+      processed += 1;
+      const kids = el.children;
+      for (let i = 0; i < kids.length; i += 1) {
+        enqueue(kids[i] as Element);
       }
     }
 
-    const containerWidth = container.clientWidth;
-    if (containerWidth <= 0) return;
-
-    // 首次扫描必须覆盖整个容器：若启动瞬间页面就有新增节点（例如其他功能插入 DOM），
-    // 增量分支会把全量扫描挤掉，导致初始内容识别不到。
-    if (!fullScanDone || pending.length === 0) {
-      scan(container, containerWidth);
-      fullScanDone = true;
-      if (pending.length === 0) return;
-    }
-
-    const nodes = pending;
-    pending = [];
-    for (const node of nodes) {
-      if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) continue;
-      if (!node.isConnected) continue;
-      scan(node as ParentNode, containerWidth);
-    }
+    if (queue.length > 0) scheduleWork();
   }
 
-  function schedule(nodes?: Node[]): void {
-    if (nodes?.length) pending.push(...nodes);
-    if (scheduled) return;
+  function scheduleWork(): void {
+    if (scheduled || stopped) return;
     scheduled = true;
-    const run = () => flush();
+    const run = () => workSlice();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
     else setTimeout(run, 16);
   }
 
-  function onMutation(mutations: MutationRecord[]): void {
-    const added: Node[] = [];
-    for (const mutation of mutations) {
-      mutation.addedNodes.forEach((node) => added.push(node));
+  function fullScan(): void {
+    if (!container) return;
+    queue = [];
+    enqueue(container);
+    scheduleWork();
+  }
+
+  /** 保证容器存在：首现或容器被替换时全量扫一次并挂 ResizeObserver */
+  function ensureContainer(): HTMLElement | null {
+    if (container && container.isConnected) return container;
+    container = document.querySelector<HTMLElement>(containerSelector);
+    if (!container) return null;
+
+    reset();
+    resizeObserver?.disconnect();
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        if (!container || stopped) return;
+        const w = container.clientWidth;
+        // 宽度变化超过容差才整树复位重扫（普通布局抖动不触发）
+        if (Math.abs(w - scannedWidth) > opts.tolerance) {
+          scannedWidth = w;
+          reset();
+          fullScan();
+        }
+      });
+      resizeObserver.observe(container);
     }
-    schedule(added.length ? added : undefined);
+    scannedWidth = container.clientWidth;
+    fullScan();
+    return container;
+  }
+
+  function flush(): void {
+    if (stopped) return;
+    if (ensureContainer() && queue.length > 0) scheduleWork();
   }
 
   return {
-    /** 启动：立即扫描一次，并监听后续 DOM 新增与容器尺寸变化 */
+    /** 启动：立即扫描一次，并订阅共享 DOM 变更池做增量扫描 */
     start(): void {
-      schedule();
+      stopped = false;
+      flush();
+      domContentLoadedHandler = () => flush();
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => schedule(), { once: true });
+        document.addEventListener('DOMContentLoaded', domContentLoadedHandler, { once: true });
       }
-      new MutationObserver(onMutation).observe(document.documentElement, {
-        childList: true,
-        subtree: true,
+      // 增量：订阅 dom-watch 单例共享的新增节点池
+      unsubscribe = onDomChanged(({ added, overflow: hadOverflow }) => {
+        if (stopped) return;
+        // overflow 说明单批新增超上限、池可能丢节点：宽列布局下宁可整树补扫一次
+        if (hadOverflow) {
+          reset();
+          flush();
+          return;
+        }
+        let any = false;
+        for (const node of added) {
+          if (!node.isConnected) continue;
+          // 只关心主列内部的节点
+          if (container && !container.contains(node)) continue;
+          enqueue(node);
+          any = true;
+        }
+        if (any) scheduleWork();
       });
-      window.addEventListener('resize', () => {
+      resizeHandler = () => {
         reset();
-        schedule();
-      });
+        flush();
+      };
+      window.addEventListener('resize', resizeHandler);
+      visibilityHandler = () => {
+        if (!document.hidden) flush();
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
     },
     /** 停止并还原所有改动 */
     stop(): void {
+      stopped = true;
       resizeObserver?.disconnect();
       resizeObserver = null;
+      unsubscribe?.();
+      unsubscribe = null;
+      if (domContentLoadedHandler) document.removeEventListener('DOMContentLoaded', domContentLoadedHandler);
+      if (resizeHandler) window.removeEventListener('resize', resizeHandler);
+      if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
       reset();
       container = null;
     },

@@ -8,11 +8,18 @@
  *    （主列 + 30 间距 + 右栏 350 + 右栏 margin-right 70），
  *    这里按视口可用空间动态收敛，并把三栏行 `min-width` 撑开以容纳主列 + 右栏
  *    （X 的父容器 overflow:visible，撑开不会裁剪，也不会产生横向滚动条）。
+ *
+ * 监听策略（性能版）：
+ * - 不再自建轮询定时器 / 全站 MutationObserver。主列 / 右栏的出现与消失走
+ *   dom-watch 单例派发的合并批次（滚动时也只有 120ms 一次的节流回调）；
+ * - 右栏显隐会改变可用宽度：sidebar 功能切换后会广播 `te:layout`，这里订阅重算；
+ * - 自身调整完布局也会广播 `te:layout`，供左右栏锚定逻辑（sidebar）跟随。
  */
 import { CONFIG } from '../config';
 import { registerToggleMenu } from '../lib/menu';
 import { readFlag, writeFlag } from '../lib/store';
 import { createWidthUnlocker } from '../lib/unlock-width';
+import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import './timeline-width.css';
 
 /** 主列选择器 */
@@ -26,6 +33,10 @@ const EDGE = 16;
 const BREAKPOINT = 1095;
 
 let wide = CONFIG.timelineWide;
+/** 上次实际写入的几何（用于判定是否真的变化，避免无意义地反复广播 te:layout） */
+let lastEnabled: boolean | null = null;
+let lastTarget = 0;
+let lastMinWidth = '';
 
 /** 右栏实际占用的横向空间（宽度 + margin-right + 与主列的间距）；隐藏时为 0 */
 function measureSidebarOuter(): number {
@@ -49,9 +60,16 @@ function applyTimelineLayout(): void {
   if (!primary || !row) return;
 
   const enabled = wide && window.innerWidth >= BREAKPOINT;
+  const changed = enabled !== lastEnabled;
   if (!enabled) {
-    root.dataset.teTimeline = 'off';
-    row.style.removeProperty('min-width');
+    if (changed) {
+      root.dataset.teTimeline = 'off';
+      row.style.removeProperty('min-width');
+      lastEnabled = false;
+      lastTarget = 0;
+      lastMinWidth = '';
+      dispatchLayoutEvent();
+    }
     return;
   }
   root.dataset.teTimeline = 'wide';
@@ -60,14 +78,21 @@ function applyTimelineLayout(): void {
   const rowLeft = row.getBoundingClientRect().left;
   const available = window.innerWidth - rowLeft - EDGE - sidebarOuter;
   const target = Math.max(MIN_WIDTH, Math.min(CONFIG.timelineWidth, Math.round(available)));
+  const minWidth = `${Math.round(target + sidebarOuter)}px`;
+
+  const geometryChanged = changed || target !== lastTarget || minWidth !== lastMinWidth;
+  lastEnabled = true;
+  lastTarget = target;
+  lastMinWidth = minWidth;
+  if (!geometryChanged) return;
 
   root.style.setProperty('--te-timeline-width', `${target}px`);
   // 撑开三栏行，让「主列 + 右栏」放得下（父容器 overflow:visible，不会裁剪）
-  row.style.minWidth = `${Math.round(target + sidebarOuter)}px`;
+  row.style.minWidth = minWidth;
   root.dataset.teTimelineWidth = String(target);
 
   // 布局（尤其行的 min-width）变化会移动主列，通知锚定逻辑重新摆放左右栏
-  document.dispatchEvent(new CustomEvent('te:layout'));
+  dispatchLayoutEvent();
 }
 
 function toggleWide(): void {
@@ -77,6 +102,18 @@ function toggleWide(): void {
 }
 
 export function enableTimelineWidth(): void {
+  // 主列是 React 渲染的，可能晚于脚本注入：订阅共享观察器，出现 / 结构变化时重算。
+  // 回调本身很廉价（几次 querySelector + getBoundingClientRect），120ms 节流足够。
+  let layoutScheduled = false;
+  const scheduleLayout = (): void => {
+    if (layoutScheduled) return;
+    layoutScheduled = true;
+    requestAnimationFrame(() => {
+      layoutScheduled = false;
+      applyTimelineLayout();
+    });
+  };
+
   applyTimelineLayout();
   // 存储读取是异步的，先用默认值渲染，读到用户设置后再覆盖
   void readFlag('timeline-wide').then((stored) => {
@@ -87,29 +124,29 @@ export function enableTimelineWidth(): void {
   });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', applyTimelineLayout, { once: true });
+    document.addEventListener('DOMContentLoaded', scheduleLayout, { once: true });
   }
-  window.addEventListener('load', applyTimelineLayout, { once: true });
-  window.addEventListener('resize', applyTimelineLayout);
+  window.addEventListener('load', scheduleLayout, { once: true });
+  window.addEventListener('resize', scheduleLayout);
+  // 右栏显示 / 隐藏会改变可用宽度：sidebar 切换后广播 te:layout，这里跟随重算
+  document.addEventListener('te:layout', scheduleLayout);
 
-  // 主列是 React 渲染的，可能晚于脚本注入与 load 事件；上面的调用都会因
-  // 主列缺失而提前 return，导致「刷新后存储的宽时间线状态不生效」。
-  // 这里轮询兜底，直到主列出现并成功应用一次（有界，30 次 × 300ms ≈ 9s）。
-  let tries = 0;
-  const timer = window.setInterval(() => {
-    tries += 1;
-    const primaryReady = document.querySelector(PRIMARY_COLUMN) !== null;
-    applyTimelineLayout();
-    if (primaryReady || tries >= 30) window.clearInterval(timer);
-  }, 300);
-
-  // 右栏显示 / 隐藏会改变可用宽度，跟着重算
-  new MutationObserver(applyTimelineLayout).observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-te-sidebar'],
+  // 主列可能在任意时刻被 React 挂载 / 替换（SPA 导航），订阅共享 DOM 批次即可。
+  // 判断采用「主列 / 右栏的存在性跃迁」：每批（120ms 一次）只做两个 querySelector
+  // 的廉价检查，而不是遍历新增节点子树 —— 滚动时插入的普通推文不会触发重算。
+  let hadPrimary = document.querySelector(PRIMARY_COLUMN) !== null;
+  let hadSidebar = document.querySelector(SIDEBAR_COLUMN) !== null;
+  onDomChanged(({ overflow: hadOverflow }) => {
+    const nowPrimary = document.querySelector(PRIMARY_COLUMN) !== null;
+    const nowSidebar = document.querySelector(SIDEBAR_COLUMN) !== null;
+    const relevant =
+      hadOverflow || nowPrimary !== hadPrimary || nowSidebar !== hadSidebar;
+    hadPrimary = nowPrimary;
+    hadSidebar = nowSidebar;
+    if (relevant) scheduleLayout();
   });
 
-  // 解除主列内部被写死宽度的容器（推文、时间线列表等）
+  // 解除主列内部被写死宽度的容器（推文、时间线列表等）—— 增量 + 时间片扫描
   createWidthUnlocker(PRIMARY_COLUMN, {
     lockedRange: CONFIG.lockedWidthRange,
   }).start();

@@ -12,7 +12,7 @@ export default defineConfig({
       userscript: {
         name: 'Twitter / X 页面优化',
         namespace: 'twitter-enhancer',
-        version: '0.0.1',
+        version: '0.0.2',
         description: '推特（X）网页体验优化：时间线列宽调整等',
         author: 'twitter-enhancer',
         match: [

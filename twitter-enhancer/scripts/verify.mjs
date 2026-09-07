@@ -532,6 +532,76 @@ expect('右栏显示时左栏同样锚在主列左侧', rail10.style.left, '445p
 expect('右栏显示时三栏行改为左对齐', row10.style.justifyContent, 'flex-start');
 expect('右栏紧贴主列右侧（固定 30px）', sb10.style.marginLeft, '30px');
 
+// ================= 实例十四：document-start 透明背景不误判暗色 =================
+// X 未完成首次上色时 body 背景是 rgba(0,0,0,0) / transparent；旧版按数值 0 亮度
+// 会误判为 Dark 造成首屏闪烁。新版：透明视为「未上色」，回退系统偏好（jsdom 为 light）。
+const w15 = createWindow();
+w15.eval(script);
+await sleep(120);
+const theme15 = w15.document.documentElement.dataset.teTheme;
+expect('透明背景回退系统偏好而非误判暗色', theme15 === 'dark', false);
+expect('透明背景下主题已写入（light）', theme15, 'light');
+
+// ================= 实例十五：滚动新增媒体走增量锁定 =================
+// 初始无媒体 → 模拟滚动时 React 追加一条含图片的推文（宿主 716×500）。
+// dom-watch 单例以 120ms 合并派发，增量路径应锁定新宿主（而非全站重扫）。
+const HTML_LATE_MEDIA = `<!doctype html><html><head></head><body>
+  <div data-testid="primaryColumn"><article id="feed"></article></div>
+</body></html>`;
+const w16 = createWindow(HTML_LATE_MEDIA);
+w16.eval(script);
+await sleep(150);
+const feed = w16.document.getElementById('feed');
+const lateHost = w16.document.createElement('div');
+lateHost.id = 'lateWrap';
+lateHost.setAttribute('data-w', '716');
+lateHost.setAttribute('data-h', '500');
+lateHost.innerHTML = '<div data-testid="tweetPhoto"><img /></div>';
+feed.appendChild(lateHost);
+await sleep(260); // 等 dom-watch 合并冲刷 + rAF 时间片
+const scale16 = Number.parseFloat(
+  (lateHost.style.transform.match(/scale\(([\d.]+)\)/) || [])[1] || '0',
+);
+expect('滚动新增媒体宿主被锁定', lateHost.dataset.teMediaLocked, '1');
+expect('新增媒体缩放为宽度钳制（566/716）', Math.round(scale16 * 1000) / 1000, Math.round((566 / 716) * 1000) / 1000);
+
+// ================= 实例十六：布局回落（te:layout）后已锁宿主自动解锁 =================
+// 宿主 718 宽被锁（scale 566/718）；主列回落后宿主宽度变为 500（低于锁定值），
+// sidebar / timeline 切换会广播 te:layout，此时应解除缩放而不是残留。
+const HTML_SHRINK = `<!doctype html><html><head></head><body>
+  <div data-testid="primaryColumn"><article>
+    <div id="shrinkWrap" data-w="718" data-h="512">
+      <div data-testid="videoPlayer"></div>
+    </div>
+  </article></div>
+</body></html>`;
+const w17 = createWindow(HTML_SHRINK);
+w17.eval(script);
+await sleep(150);
+const shrinkWrap = w17.document.getElementById('shrinkWrap');
+expect('宽宿主先被锁定', shrinkWrap.dataset.teMediaLocked, '1');
+shrinkWrap.setAttribute('data-w', '500'); // 布局回落：宽度低于锁定值
+w17.document.dispatchEvent(new w17.CustomEvent('te:layout'));
+await sleep(30);
+expect('布局回落后已锁宿主解除标记', shrinkWrap.dataset.teMediaLocked, undefined);
+expect('布局回落后缩放样式被清除', shrinkWrap.style.transform, '');
+
+// ================= 实例十七：滚动新增的写死宽度容器被增量解锁 =================
+// 初始容器内已解锁；模拟 React 无限加载追加一条写死 600px 的新推文。
+// 增量路径应识别并打上标记（无需整树重扫旧节点）。
+const w18 = createWindow();
+w18.eval(script);
+await sleep(150);
+const timeline18 = w18.document.getElementById('timeline');
+const lateLocked = w18.document.createElement('div');
+lateLocked.id = 'lateLocked';
+lateLocked.style.width = '600px';
+lateLocked.textContent = 'late tweet';
+timeline18.appendChild(lateLocked);
+await sleep(200); // 等 dom-watch 合并 + rAF 时间片
+expect('滚动新增的 600px 容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
+expect('既有解锁标记未被打乱', w18.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
 // ================= 输出 =================
 let failed = 0;
 for (const r of results) {

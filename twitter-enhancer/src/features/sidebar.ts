@@ -19,6 +19,7 @@
 import { CONFIG } from '../config';
 import { registerToggleMenu } from '../lib/menu';
 import { readFlag, writeFlag } from '../lib/store';
+import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import './sidebar.css';
 
 const SIDEBAR = '[data-testid="sidebarColumn"]';
@@ -406,10 +407,14 @@ function watchAnchor(): void {
 let hidden = CONFIG.sidebar.hiddenByDefault;
 
 function applyHidden(value: boolean): void {
+  const changed = value !== hidden;
   hidden = value;
   document.documentElement.dataset.teSidebar = value ? 'off' : 'on';
   applyRecenter();
   applyAnchor();
+  // 右栏显隐会改变主列可用宽度，通知宽时间线重算（旧版靠观察 data-te-sidebar 属性，
+  // 已随全站观察器收敛移除，改由显式事件驱动）
+  if (changed) dispatchLayoutEvent();
 }
 
 function toggleSidebar(): void {
@@ -522,21 +527,35 @@ export function enableSidebarSearch(): void {
   // 布局稳定后（字体、图片加载完）位置可能变化，再校正一次
   window.addEventListener('load', sync, { once: true });
 
-  // 高频 mutation 下合并，每次最多校正一次。
-  // 用 setTimeout 而非 rAF：后台标签页的 rAF 会被冻结，回前台后若无新 mutation，
-  // 后台期间累积的 DOM 变化（新推文 / 重渲染）将永远得不到校正。
-  let scheduled = false;
-  new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    setTimeout(() => {
-      scheduled = false;
+  // 订阅 dom-watch 单例派发的合并批次（120ms 节流）。
+  // 只在与导航条 / 侧栏 / 右栏结构相关的变更时才做校正，避免滚动时虚拟列表
+  // 插入推文触发无谓的几何重算（applyAnchor / mountBesideLogo 含测量）。
+  // 用 setTimeout 语义由 dom-watch 提供（后台标签页不被冻结），
+  // 回前台由 dom-watch 的 visibilitychange 兜底冲刷。
+  onDomChanged(({ added, overflow: hadOverflow }) => {
+    if (hadOverflow) {
       sync();
-    }, 50);
-  }).observe(document.documentElement, { childList: true, subtree: true });
-  // 回到前台时补一次校正，兜住后台期间累积的变化
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) sync();
+      return;
+    }
+    const nav = findNav();
+    let relevant = false;
+    for (const node of added) {
+      // 导航条 / 右栏（或右栏祖先）出现
+      if (node.matches?.(SIDEBAR) || node.querySelector?.(SIDEBAR)) {
+        relevant = true;
+        break;
+      }
+      if (nav && (node.contains(nav) || nav.contains(node))) {
+        relevant = true;
+        break;
+      }
+      // 搜索宿主被移除后重新挂载，或原生搜索框重新出现（move 模式）
+      if (node.matches?.('.te-search-host, [data-testid="SearchBox_Search_Input"]')) {
+        relevant = true;
+        break;
+      }
+    }
+    if (relevant) sync();
   });
 
   interceptSlashShortcut();

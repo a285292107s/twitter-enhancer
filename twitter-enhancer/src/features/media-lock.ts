@@ -1,5 +1,5 @@
 /**
- * 图片锁定原生尺寸：主列加宽后，媒体（图片 / 视频）不跟着放大。
+ * 媒体尺寸锁定：主列加宽后，媒体（图片 / 视频）不跟着无节制放大。
  *
  * 背景（真机实测）：X 把媒体区宽度绑定到推文内容宽——主列 600→800 时，
  * 轮播格 306×565 → 426×786、单图同比例放大（宽高均 +39%），竖图高度可到 890px，
@@ -15,11 +15,19 @@
  * 3. transform 不参与布局，用负 margin-bottom 补偿缩小的占位高度，
  *    否则推文底部会留出一大段空白；
  * 4. 只改宿主的 inline style，不插入 / 移动任何 React 管理的节点。
+ *
+ * 监听策略（性能版）：
+ * - 滚动时新增 / 恢复的媒体来自 dom-watch 单例派发的共享批次，只增量处理
+ *   新增节点子树，不再每 50ms 对全站 MEDIA_SELECTOR 全量重扫；
+ * - 每个宿主挂 ResizeObserver：图片加载完成、主列宽变化导致宿主尺寸变化时
+ *   就地重算缩放（有界，宿主数量 = 屏幕上媒体数）；
+ * - 主列宽切换（宽时间线开关 / 右栏显隐 → te:layout）后做一次全量对账，
+ *   把宽高已回落 / 超限的宿主统一修正；媒体数量少，全量对账代价可忽略。
  */
-
 import { CONFIG } from '../config';
 import { registerToggleMenu } from '../lib/menu';
 import { readFlag, writeFlag } from '../lib/store';
+import { onDomChanged } from '../lib/dom-watch';
 
 /** 媒体元素：图片与视频 */
 const MEDIA_SELECTOR = '[data-testid="tweetPhoto"],[data-testid="videoPlayer"]';
@@ -33,6 +41,16 @@ let locked = CONFIG.media.lock;
 /** 宿主上的锁定标记属性选择器（dataset.teMediaLocked → data-te-media-locked） */
 const FLAG_SELECTOR = '[data-te-media-locked]';
 
+/** 全局共享的 ResizeObserver：宿主尺寸变化时重算缩放 */
+const resizeObserver =
+  typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          scaleHost(entry.target as HTMLElement);
+        }
+      })
+    : null;
+
 /**
  * 解除单个宿主的缩放（含清理标记与 ResizeObserver）。
  * 供「关闭开关」「scale 回落到 1」「清除嵌套冗余锁定」三条路径复用。
@@ -43,7 +61,7 @@ function unlockHost(host: HTMLElement): void {
   }
   delete host.dataset[FLAG];
   delete host.dataset[OBSERVED];
-  observer?.unobserve(host);
+  resizeObserver?.unobserve(host);
 }
 
 /**
@@ -62,28 +80,21 @@ function findHost(el: Element): HTMLElement | null {
   return null;
 }
 
-const observer =
-  typeof ResizeObserver !== 'undefined'
-    ? new ResizeObserver((entries) => {
-        // 图片加载完成后宿主高度会变，占位补偿需要跟着重算
-        for (const entry of entries) {
-          scaleHost(entry.target as HTMLElement);
-        }
-      })
-    : null;
-
 /**
  * 对单个宿主执行缩放（幂等：transform 不影响 offsetWidth / offsetHeight）。
  *
  * 缩放因子取宽、高两个方向的较小值（contain 语义）：
  * - 横图被宽度钳住：不超过 566px（600 布局的内容宽）；
- * - 竖图被高度钳住：不超过 maxHeight（540px），一屏内即可看全，无需上下滚动；
+ * - 竖图被高度钳住：不超过 maxHeight，一屏内即可看全，无需上下滚动；
  * - 两者都不超时 scale = 1，保持 X 原生尺寸。
  * 宽高取同一比例，图片永远不变形。
  */
 function scaleHost(host: HTMLElement): void {
   // 开关已关闭时不再加锁（ResizeObserver 回调仍可能触发本函数）
-  if (!locked) return;
+  if (!locked) {
+    if (host.dataset[FLAG]) unlockHost(host);
+    return;
+  }
   const width = host.offsetWidth;
   const height = host.offsetHeight;
   if (width === 0 || height === 0) return;
@@ -103,8 +114,8 @@ function scaleHost(host: HTMLElement): void {
   host.style.transform = `scale(${scale.toFixed(4)})`;
   host.style.marginBottom = `${-Math.round(height * (1 - scale))}px`;
   host.dataset[FLAG] = '1';
-  if (observer && !host.dataset[OBSERVED]) {
-    observer.observe(host);
+  if (resizeObserver && !host.dataset[OBSERVED]) {
+    resizeObserver.observe(host);
     host.dataset[OBSERVED] = '1';
   }
 }
@@ -123,7 +134,15 @@ function applyOne(media: Element): void {
   scaleHost(host);
 }
 
-function applyMediaLock(): void {
+/**
+ * 全量对账：归一化嵌套锁定，锁定新出现的媒体，并对已锁宿主重算缩放。
+ * 仅「开关切换 / 布局大变化（te:layout）/ 增量批次 overflow」时调用，媒体数少，代价可忽略。
+ *
+ * 注意必须显式重算「已锁宿主」：宿主一旦加锁，其内部媒体就被标记覆盖、
+ * applyOne 不再触碰它；若主列宽度回落 / 布局变化让宿主不再超限，只能靠这里
+ * 或宿主的 ResizeObserver 解除（scale ≥ 1 时 scaleHost 自动解锁）。
+ */
+function reconcileMediaLock(): void {
   if (!locked) {
     resetMediaLock();
     return;
@@ -132,8 +151,33 @@ function applyMediaLock(): void {
   for (const inner of document.querySelectorAll(`${FLAG_SELECTOR} ${FLAG_SELECTOR}`)) {
     unlockHost(inner as HTMLElement);
   }
+  // 锁新出现的媒体（未被外层覆盖的才处理）
   for (const media of document.querySelectorAll(MEDIA_SELECTOR)) {
-    applyOne(media);
+    if (media.closest(FLAG_SELECTOR)) continue;
+    const host = findHost(media);
+    if (!host) continue;
+    // 锁外层前清掉内部冗余锁定——外层缩放已覆盖全部内容
+    for (const inner of host.querySelectorAll(FLAG_SELECTOR)) {
+      unlockHost(inner as HTMLElement);
+    }
+    scaleHost(host);
+  }
+  // 对已锁宿主重算：布局变化后可能仍需缩放 / 已回落应解锁（scaleHost 内处理解锁）
+  for (const host of document.querySelectorAll<HTMLElement>(FLAG_SELECTOR)) {
+    scaleHost(host);
+  }
+}
+
+/** 增量处理：只检视新增节点子树里的媒体 */
+function processAdded(added: Element[]): void {
+  if (!locked) return;
+  for (const node of added) {
+    if (!node.isConnected) continue;
+    if (node.matches?.(MEDIA_SELECTOR)) applyOne(node);
+    const inside = node.querySelectorAll?.(MEDIA_SELECTOR);
+    if (inside) {
+      for (const media of inside) applyOne(media);
+    }
   }
 }
 
@@ -148,42 +192,42 @@ function resetMediaLock(): void {
 
 function toggleLock(): void {
   locked = !locked;
-  applyMediaLock();
+  reconcileMediaLock();
   void writeFlag('media-lock', locked);
 }
 
 export function enableMediaLock(): void {
-  applyMediaLock();
+  reconcileMediaLock();
   // 存储读取是异步的，先用默认值渲染，读到用户设置后再覆盖
   void readFlag('media-lock').then((stored) => {
     if (stored !== null && stored !== locked) {
       locked = stored;
-      applyMediaLock();
+      reconcileMediaLock();
     }
   });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', applyMediaLock, { once: true });
+    document.addEventListener('DOMContentLoaded', reconcileMediaLock, { once: true });
   }
-  window.addEventListener('load', applyMediaLock, { once: true });
+  window.addEventListener('load', reconcileMediaLock, { once: true });
 
-  // 注意用 setTimeout 而非 rAF：后台标签页的 rAF 会被浏览器冻结，
-  // 回到前台后若没有新的 mutation，已插入的媒体将永远得不到处理。
-  // setTimeout 在后台最多被节流到 1s，最终仍会执行。
-  let scheduled = false;
-  new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    setTimeout(() => {
-      scheduled = false;
-      applyMediaLock();
-    }, 50);
-  }).observe(document.documentElement, { childList: true, subtree: true });
-
-  // 从后台回到前台时补扫一次，兜住后台期间累积的未处理媒体
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) applyMediaLock();
+  // 增量：订阅 dom-watch 单例的共享新增节点池（滚动恢复的媒体从这里来）
+  onDomChanged(({ added, overflow: hadOverflow }) => {
+    if (!locked) return;
+    if (hadOverflow) {
+      // 单批新增超上限、池可能丢节点：做一次全量对账兜底
+      reconcileMediaLock();
+      return;
+    }
+    processAdded(added);
   });
+
+  // 主列宽度 / 右栏显隐变化（宽时间线开关、右栏切换）会整体改变媒体宿主尺寸，
+  // 全量对账一次修正缩放。媒体宿主本身也挂 ResizeObserver，双保险。
+  const onLayout = (): void => {
+    if (locked) reconcileMediaLock();
+  };
+  document.addEventListener('te:layout', onLayout);
 
   registerToggleMenu({
     label: (enabled) => `图片锁定原生尺寸：${enabled ? '开' : '关'}`,
