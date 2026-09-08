@@ -67,6 +67,29 @@ playwright-cli -s=x-te delete-data
 > 常用验证链路：改 `media-cap` → `npm run verify`（jsdom 回归）→ 真机 DOM 几何验证走 `x-te`
 > （需要登录态且 x.com 布局以登录为准）。
 
+#### 真机 E2E（自动注入 dist 产物，替代手动探测几何）
+
+`playwright-cli` 没有 addInitScript / 扩展通道，几何断言无法自动化。仓库提供
+`twitter-enhancer/scripts/e2e-real.mjs`（方案 B，2026-09 引入）：直接驱动全局
+`@playwright/cli` 内置的 playwright 模块 + 缓存内核，headless 起独立持久 profile
+`browser-profiles/x-te-e2e`（已 gitignore），用 addInitScript 在 document-start 时序
+**先注入 `scripts/e2e/gm-shim.js`（只补 GM_addStyle，见文件头注释）再注入
+`dist/twitter-enhancer.user.js`**，然后断言真实布局几何（宽列 800 / 右栏隐藏 /
+Alt+B 切换 / 媒体钳制与解锁）。
+
+```powershell
+# 先构建，再跑（登录态自动从仓库根 auth.json 导入；之后随 profile 持久化）
+cd twitter-enhancer
+npm run verify
+npm run e2e:real
+```
+
+- 覆盖/不覆盖：能验真实布局引擎下的几何、结构兼容与 document-start 时序；
+  **不覆盖油猴菜单 UI 与真 GM_* 语义**（有意只 shim GM_addStyle，其余走仓库
+  localStorage / no-op 降级路径）。发布冒烟仍需装一次真 Tampermonkey。
+- 浏览器铁律同 `x-te`：headless、独立 profile、不碰用户浏览器。脚本依赖全局
+  `@playwright/cli`，迁移机器时需改 `resolvePlaywright()`。
+
 ### 一次性登录（已完成 —— 保持可用的维护说明）
 
 状态：仓库根的 `auth.json`（Playwright storageState，含 `auth_token`/`ct0`/`twid`，**已 gitignore**）

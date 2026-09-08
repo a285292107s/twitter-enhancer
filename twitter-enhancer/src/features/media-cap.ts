@@ -23,11 +23,15 @@
  *    （自然高 ≤ 预算）后自动解锁还原。
  *
  * 监听策略（性能版，复用 dom-watch 单例）：
- * - 滚动新增/恢复的媒体走共享新增节点池增量处理；
+ * - 滚动新增/恢复的媒体走共享新增节点池增量处理：dom-watch 冲刷回调只负责
+ *   收集节点，扫描 / 钳制推迟到下一个 rAF 帧统一执行 —— 滚动路径上的同步
+ *   layout 读（offsetWidth / getBoundingClientRect）是掉帧主因，收进帧任务
+ *   后同一帧内的布局读只触发一次 layout，且多个来源可合并；
  * - 宿主挂 ResizeObserver 只按「宽度变化」触发（我们只改高度，不会自触发）；
- * - 图片/视频加载完成、窗口 resize、回到前台（visibilitychange）都触发一次
- *   去抖全量对账（后台标签页定时器被冻结，回前台必须主动补一次）；
- * - 宽时间线开关/右栏显隐（te:layout）与 SPA 路由切换（te:route）后全量对账。
+ * - 图片/视频加载完成只做「宿主粒度对账」：解锁并重测受影响的这一条链，
+ *   不做全列 reset+重钳（旧版在首屏图片并发加载时整列媒体反复回流两次）；
+ * - 结构性变化（te:layout / te:route / 宿主宽度变化 / 窗口 resize / 回前台
+ *   visibilitychange / dom-watch overflow）仍走 120ms 去抖的全量对账。
  */
 import { CONFIG } from '../config';
 import { registerToggleMenu } from '../lib/menu';
@@ -71,13 +75,54 @@ function heightBudget(): number {
 }
 
 let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
-/** 去抖后的全量对账（图片加载完成 / 视口变化 / RO 宽度变化时调用） */
+/** 去抖后的全量对账（结构性变化 / 视口变化 / RO 宽度变化时调用） */
 function scheduleReconcile(): void {
   if (reconcileTimer !== null) return;
   reconcileTimer = setTimeout(() => {
     reconcileTimer = null;
     reconcileMediaCap();
   }, RECONCILE_DEBOUNCE);
+}
+
+/* ------------------------------------------------------------------ *
+ * 帧任务合并（性能版）
+ *
+ * dom-watch 的冲刷回调运行在滚动路径上（每 120ms 一批）。任何同步的子树
+ * 扫描 / offsetWidth 布局读都会抢主线程并强制 layout，是滚动掉帧的来源。
+ * 因此订阅回调只做两件廉价的事：把本批新增节点收进 pendingAdded、把
+ * 「加载完成的已钳宿主」收进 pendingLoadedHosts；真正的工作推迟到下一个
+ * rAF 帧统一执行（后台标签页 rAF 被冻结时退回 setTimeout），每帧至多跑
+ * 一次 —— 帧内多次几何读只触发一次 layout，其余命中浏览器布局缓存。
+ * ------------------------------------------------------------------ */
+const FALLBACK_FRAME_MS = 16;
+
+let frameQueued = false;
+let pendingAdded: Element[] | null = null;
+const pendingLoadedHosts = new Set<HTMLElement>();
+
+function queueFrameWork(): void {
+  if (frameQueued) return;
+  frameQueued = true;
+  const run = (): void => {
+    frameQueued = false;
+    runFrameWork();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, FALLBACK_FRAME_MS);
+}
+
+function runFrameWork(): void {
+  const added = pendingAdded;
+  pendingAdded = null;
+  if (added && added.length > 0) processAdded(added);
+  if (pendingLoadedHosts.size > 0) {
+    const hosts = [...pendingLoadedHosts];
+    pendingLoadedHosts.clear();
+    for (const host of hosts) {
+      if (!host.isConnected) continue;
+      reconcileHostChain(host);
+    }
+  }
 }
 
 /** 解除单个宿主的钳制（含清理标记、ResizeObserver 与还原 padding） */
@@ -90,6 +135,31 @@ function unlockHost(host: HTMLElement): void {
   delete host.dataset[FLAG];
   delete host.dataset[OBSERVED];
   resizeObserver?.unobserve(host);
+}
+
+/**
+ * 宿主粒度对账：媒体加载完成 / 尺寸变化后只解锁并重测这一条宿主链。
+ *
+ * 旧版对任何变化都做全量 reconcile（先 resetMediaCap 放开全列所有钳制、
+ * 再全部重钳）—— 首屏图片并发加载时会反复让整列媒体先回原高再压回预算，
+ * 等于每批加载都做两次整列布局回流，肉眼可见地闪。
+ * 加载事件只影响自身这条链的自然高（宿主 + 宿主上方一起压的纯媒体祖先
+ * 只属于这一个钳制组，见 applyCap 的链式收集与 closest 防嵌套），逐链
+ * 解锁重测即可：自然高仍超预算则重新钳制，已回落则保持解锁。
+ */
+function reconcileHostChain(start: HTMLElement): void {
+  if (!locked || !isActive()) return;
+  const chain: HTMLElement[] = [];
+  let el: HTMLElement | null = start;
+  while (el && el !== document.body && el.dataset[FLAG]) {
+    chain.push(el);
+    el = el.parentElement;
+  }
+  if (chain.length === 0) return;
+  for (const item of chain) unlockHost(item);
+  // 重新定位真正的行宿主并钳制（applyCap 内会重测自然高，不超预算即保持解锁）
+  const host = findHost(start);
+  if (host) applyCap(host);
 }
 
 /**
@@ -227,7 +297,8 @@ const resizeObserver =
 /**
  * 全量对账：先解除所有钳制（重测自然高度），再对当前所有媒体重新钳制。
  * 宿主数量 = 屏上媒体数，代价可忽略；te:layout / te:route / overflow /
- * 宿主宽度变化 / 媒体加载完成时调用。
+ * 宿主宽度变化 / 窗口 resize / 回前台时调用（媒体加载完成走宿主粒度
+ * reconcileHostChain，不经过这里，避免整列反复回流）。
  */
 function reconcileMediaCap(): void {
   if (!locked || !isActive()) {
@@ -247,17 +318,23 @@ function reconcileMediaCap(): void {
   }
 }
 
-/** 增量处理：只检视新增节点子树里的媒体 */
+/** 增量处理：只检视新增节点子树里的媒体（在 rAF 帧任务内调用，见 runFrameWork） */
 function processAdded(added: Element[]): void {
   if (!locked || !isActive()) return;
+  // 一个媒体可能既作为节点本身出现、又被其祖先的 querySelectorAll 命中，
+  // 也可能跨两批 flush 被重复收集：先去重再逐个处理，避免对同一宿主重复钳制
+  const seen = new Set<Element>();
   for (const node of added) {
     if (!node.isConnected) continue;
-    if (node.matches?.(MEDIA_SELECTOR)) applyOne(node);
+    if (node.matches?.(MEDIA_SELECTOR)) seen.add(node);
     const inside = node.querySelectorAll?.(MEDIA_SELECTOR);
     if (inside) {
-      for (const media of inside) applyOne(media);
+      for (const media of inside) {
+        if (media.isConnected) seen.add(media);
+      }
     }
   }
+  for (const media of seen) applyOne(media);
 }
 
 /** 撤销所有钳制（功能关闭 / 布局回原生时还原 X 原生观感） */
@@ -288,15 +365,20 @@ export function enableMediaCap(): void {
   }
   window.addEventListener('load', reconcileMediaCap, { once: true });
 
-  // 增量：订阅 dom-watch 单例的共享新增节点池（滚动恢复的媒体从这里来）
+  // 增量：订阅 dom-watch 单例的共享新增节点池（滚动恢复的媒体从这里来）。
+  // 冲刷回调只负责收集节点、绝不做事 —— 扫描 / 钳制全部推迟到下一个 rAF
+  // 帧统一执行（滚动路径上的同步 layout 读是掉帧主因）。overflow 说明单批
+  // 新增超上限、池可能丢节点：结构性缺失，走去抖全量对账兜底。
   onDomChanged(({ added, overflow: hadOverflow }) => {
-    if (!locked || !isActive()) return;
+    if (!locked) return;
     if (hadOverflow) {
-      // 单批新增超上限、池可能丢节点：全量对账兜底一次
-      reconcileMediaCap();
+      scheduleReconcile();
       return;
     }
-    processAdded(added);
+    if (added.length === 0) return;
+    if (pendingAdded) pendingAdded.push(...added);
+    else pendingAdded = added.slice();
+    queueFrameWork();
   });
 
   // 宽时间线开关 / 右栏显隐 / SPA 路由都会重建或移动媒体子树，全量对账一次。
@@ -307,12 +389,18 @@ export function enableMediaCap(): void {
   onRouteChanged(onLayout);
 
   // 图片 / 视频加载完成后自然尺寸会变（占位 → 真实比例），媒体行高随之重排：
-  // 捕获阶段监听 load / loadeddata，命中已钳宿主时去抖对账，消除残留空白。
+  // 捕获阶段监听 load / loadeddata，命中已钳宿主时做宿主粒度对账（解锁重测
+  // 这一条链），不再像旧版那样触发全列 reset+重钳 —— 首屏图片并发加载时
+  // 整列媒体会反复回流两次，肉眼可见地闪。帧任务在下一个 rAF 里合并执行。
   const onMediaLoad = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (!(target instanceof HTMLImageElement || target instanceof HTMLVideoElement)) return;
-    if (target.closest?.(FLAG_SELECTOR)) scheduleReconcile();
+    if (!locked) return;
+    const flagged = target.closest<HTMLElement>(FLAG_SELECTOR);
+    if (!flagged) return;
+    pendingLoadedHosts.add(flagged);
+    queueFrameWork();
   };
   document.addEventListener('load', onMediaLoad, true);
   document.addEventListener('loadeddata', onMediaLoad, true);

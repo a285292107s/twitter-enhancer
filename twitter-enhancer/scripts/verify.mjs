@@ -502,6 +502,90 @@ expect('解锁后清除 height', regionM.style.height, '');
 expect('解锁后清除包裹层 height', wrapM.style.height, '');
 expect('解锁后还原包裹层原始 padding', wrapM.style.paddingBottom, 'calc(100% - 4px)');
 
+// ================= 实例二十：dom-watch 溢出（单批超池上限）后整树补扫 =================
+// 旧版 bug：overflow 分支 reset() 清空待检队列后 flush() 因队列为空不会调度任何
+// 扫描 —— 标记被清掉但新增的锁宽元素永远不会被解锁。修正后应显式整树补扫。
+const wOver = createWindow();
+wOver.eval(script);
+await sleep(150);
+const tlOver = wOver.document.getElementById('timeline');
+const fragOver = wOver.document.createDocumentFragment();
+let burstLocked;
+for (let i = 0; i < 3002; i += 1) {
+  const d = wOver.document.createElement('div');
+  if (i === 0) {
+    d.id = 'burstLocked';
+    d.style.width = '600px';
+    burstLocked = d;
+  }
+  fragOver.appendChild(d);
+}
+tlOver.appendChild(fragOver);
+await sleep(700); // dom-watch 冲刷 → overflow → 整树补扫（300 节点/帧 × rAF 时间片）
+expect('溢出后新增的锁宽元素被整树补扫命中', burstLocked.dataset.teWidthUnlocked, 'fixed');
+expect('溢出补扫不打乱既有解锁标记', wOver.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
+// ================= 实例二十一：滚动增量新增的媒体走 rAF 帧任务被钳制 =================
+// 增量路径不再在 dom-watch 冲刷回调里同步扫描/钳制，而是收进下一个 rAF 帧任务。
+// 宿主链按 cellInnerDiv 边界隔离（与真实 X 结构一致），媒体加载完成只解锁自身链。
+const HTML_MEDIA_LATE = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a><a href="/explore">探索</a></nav>
+  <div id="rowLate" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%"></div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wML = createWindow(HTML_MEDIA_LATE);
+wML.eval(script);
+await sleep(150);
+const colLate = wML.document.querySelector('[data-testid="primaryColumn"] > div');
+const cellA = wML.document.createElement('div');
+cellA.setAttribute('data-testid', 'cellInnerDiv');
+cellA.id = 'cellA';
+const wrapA = wML.document.createElement('div');
+wrapA.id = 'wrapA';
+wrapA.setAttribute('data-w', '718');
+wrapA.setAttribute('data-h', '900');
+const photoA = wML.document.createElement('div');
+photoA.setAttribute('data-testid', 'tweetPhoto');
+photoA.textContent = '图A';
+wrapA.appendChild(photoA);
+cellA.appendChild(wrapA);
+const cellB = wML.document.createElement('div');
+cellB.setAttribute('data-testid', 'cellInnerDiv');
+cellB.id = 'cellB';
+const wrapB = wML.document.createElement('div');
+wrapB.id = 'wrapB';
+wrapB.setAttribute('data-w', '718');
+wrapB.setAttribute('data-h', '900');
+const photoB = wML.document.createElement('div');
+photoB.setAttribute('data-testid', 'tweetPhoto');
+photoB.textContent = '图B';
+wrapB.appendChild(photoB);
+cellB.appendChild(wrapB);
+colLate.appendChild(cellA);
+colLate.appendChild(cellB);
+await sleep(450); // dom-watch 冲刷（120ms）+ rAF 帧任务
+expect('滚动新增的媒体宿主 A 被增量钳制', wrapA.dataset.teMediaCapped, '1');
+expect('滚动新增的媒体宿主 B 被增量钳制', wrapB.dataset.teMediaCapped, '1');
+expect('增量钳制只改宿主 layout height（540）', wrapA.style.height, '540px');
+
+// 模拟宿主 A 内图片加载完成且媒体自然高回落到预算内：
+// 只解锁 A 这一条链（宿主粒度对账），B 不受影响仍保持钳制
+const imgA = wML.document.createElement('img');
+imgA.id = 'imgA';
+wrapA.appendChild(imgA);
+wrapA.setAttribute('data-h', '300');
+imgA.dispatchEvent(new wML.Event('load', { bubbles: true }));
+await sleep(250); // rAF 帧任务执行宿主粒度对账
+expect('宿主 A 图片回落预算内后解锁', wrapA.dataset.teMediaCapped, undefined);
+expect('宿主 A 解锁后清除 height', wrapA.style.height, '');
+expect('宿主 B 不受 A 的加载影响仍保持钳制', wrapB.dataset.teMediaCapped, '1');
+expect('宿主 B 高度仍为预算（540）', wrapB.style.height, '540px');
+
 // ================= 输出 =================
 let failed = 0;
 for (const r of results) {

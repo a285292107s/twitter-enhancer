@@ -134,6 +134,16 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
     scheduleWork();
   }
 
+  /**
+   * 整树补扫：清掉全部标记后从容器重新入队，显式调度扫描。
+   * reset() 会把待检队列一并清空，此时直接 flush() 因队列为空不会调度任何
+   * 扫描（旧版 overflow / resize 分支在此静默失效：标记被清掉但从未重扫）。
+   */
+  function rescanAll(): void {
+    reset();
+    if (ensureContainer()) fullScan();
+  }
+
   /** 保证容器存在：首现或容器被替换时全量扫一次并挂 ResizeObserver */
   function ensureContainer(): HTMLElement | null {
     if (container && container.isConnected) return container;
@@ -179,8 +189,7 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
         if (stopped) return;
         // overflow 说明单批新增超上限、池可能丢节点：宽列布局下宁可整树补扫一次
         if (hadOverflow) {
-          reset();
-          flush();
+          rescanAll();
           return;
         }
         let any = false;
@@ -194,8 +203,9 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
         if (any) scheduleWork();
       });
       resizeHandler = () => {
-        reset();
-        flush();
+        // 窗口尺寸变化可能让整条宽链失效：清标记并整树补扫（rescanAll 而非
+        // reset+flush —— 后者因队列被清空不会调度扫描）
+        rescanAll();
       };
       window.addEventListener('resize', resizeHandler);
       visibilityHandler = () => {
