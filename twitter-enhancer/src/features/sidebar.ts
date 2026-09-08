@@ -20,6 +20,7 @@ import { CONFIG } from '../config';
 import { registerToggleMenu } from '../lib/menu';
 import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
+import { onRouteChanged } from '../lib/spa-route';
 import './sidebar.css';
 
 const SIDEBAR = '[data-testid="sidebarColumn"]';
@@ -557,6 +558,10 @@ export function enableSidebarSearch(): void {
     }
     if (relevant) sync();
   });
+
+  // SPA 导航会重建右栏 / 三栏行容器，锚点与居中补偿写在节点上会随旧节点一起消失：
+  // 路由切换（低频）直接做一次轻量校正（sync 的快速路径只做廉价检查）。
+  onRouteChanged(() => sync());
 
   interceptSlashShortcut();
 

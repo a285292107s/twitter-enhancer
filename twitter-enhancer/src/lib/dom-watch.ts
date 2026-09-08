@@ -1,7 +1,7 @@
 /**
  * 全局 DOM 观察调度器（单例）。
  *
- * 旧版每个功能（宽度解锁、右栏搜索、媒体锁定、时间线重算）各自注册一个监听
+ * 旧版每个功能（宽度解锁、右栏搜索、时间线重算）各自注册一个监听
  * document.documentElement 的 subtree MutationObserver。X 的虚拟滚动会在滚动时
  * 高频增删节点，同一批变更被 N 个观察器重复派发，回调又各自触发全量扫描 /
  * 重建 —— 浪费且掉帧。
@@ -138,9 +138,4 @@ export function dispatchLayoutEvent(): void {
   } catch {
     // 极早期 document 未就绪时忽略
   }
-}
-
-/** 工具：某批采样里是否含结构性变更（新增元素） */
-export function mutationHasAdded(records: MutationRecord[]): boolean {
-  return records.some((r) => r.type === 'childList' && r.addedNodes.length > 0);
 }

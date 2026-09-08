@@ -5,7 +5,7 @@
 import { enableTimelineWidth } from './timeline-width';
 import { enableTweetUi } from './tweet-ui';
 import { enableSidebarSearch } from './sidebar';
-import { enableMediaLock } from './media-lock';
+import { enableMediaCap } from './media-cap';
 
 export interface Feature {
   /** 功能名，用于日志与未来做开关 */
@@ -19,5 +19,5 @@ export const features: Feature[] = [
   { name: 'timeline-width', enabled: true, enable: enableTimelineWidth },
   { name: 'tweet-ui', enabled: true, enable: enableTweetUi },
   { name: 'sidebar-search', enabled: true, enable: enableSidebarSearch },
-  { name: 'media-lock', enabled: true, enable: enableMediaLock },
+  { name: 'media-cap', enabled: true, enable: enableMediaCap },
 ];

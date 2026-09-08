@@ -20,6 +20,7 @@ import { registerToggleMenu } from '../lib/menu';
 import { readFlag, writeFlag } from '../lib/store';
 import { createWidthUnlocker } from '../lib/unlock-width';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
+import { onRouteChanged } from '../lib/spa-route';
 import './timeline-width.css';
 
 /** 主列选择器 */
@@ -37,6 +38,20 @@ let wide = CONFIG.timelineWide;
 let lastEnabled: boolean | null = null;
 let lastTarget = 0;
 let lastMinWidth = '';
+/**
+ * 上次写入 min-width 的三栏行。SPA 导航时 React 可能重建该行容器：
+ * 旧节点若带着残留 min-width 退出并无碍，但新行不会被自动撑开 ——
+ * 必须感知行容器被替换，先清旧节点再写新节点（社区教训：SPA 下任何
+ * 「写在具体节点上的内联样式」都要自己跟踪节点生命周期）。
+ */
+let lastRow: HTMLElement | null = null;
+
+/** 清掉写在上一次三栏行上的内联样式（行被 React 替换 / 功能关闭时调用） */
+function clearRowStyle(row: HTMLElement | null): void {
+  if (!row) return;
+  row.style.removeProperty('min-width');
+  row.removeAttribute('data-te-row');
+}
 
 /** 右栏实际占用的横向空间（宽度 + margin-right + 与主列的间距）；隐藏时为 0 */
 function measureSidebarOuter(): number {
@@ -59,15 +74,20 @@ function applyTimelineLayout(): void {
 
   if (!primary || !row) return;
 
+  // 行容器被 React 替换（旧引用不在新行上）：清掉旧节点的残留样式
+  const rowChanged = lastRow !== row;
+  if (lastRow && rowChanged) clearRowStyle(lastRow);
+
   const enabled = wide && window.innerWidth >= BREAKPOINT;
   const changed = enabled !== lastEnabled;
   if (!enabled) {
     if (changed) {
       root.dataset.teTimeline = 'off';
-      row.style.removeProperty('min-width');
+      clearRowStyle(row);
       lastEnabled = false;
       lastTarget = 0;
       lastMinWidth = '';
+      lastRow = null;
       dispatchLayoutEvent();
     }
     return;
@@ -80,7 +100,8 @@ function applyTimelineLayout(): void {
   const target = Math.max(MIN_WIDTH, Math.min(CONFIG.timelineWidth, Math.round(available)));
   const minWidth = `${Math.round(target + sidebarOuter)}px`;
 
-  const geometryChanged = changed || target !== lastTarget || minWidth !== lastMinWidth;
+  // 几何不变但行节点被 React 替换时也要重写（新行没有 min-width）
+  const geometryChanged = changed || rowChanged || target !== lastTarget || minWidth !== lastMinWidth;
   lastEnabled = true;
   lastTarget = target;
   lastMinWidth = minWidth;
@@ -89,6 +110,8 @@ function applyTimelineLayout(): void {
   root.style.setProperty('--te-timeline-width', `${target}px`);
   // 撑开三栏行，让「主列 + 右栏」放得下（父容器 overflow:visible，不会裁剪）
   row.style.minWidth = minWidth;
+  row.dataset.teRow = '1';
+  lastRow = row;
   root.dataset.teTimelineWidth = String(target);
 
   // 布局（尤其行的 min-width）变化会移动主列，通知锚定逻辑重新摆放左右栏
@@ -130,6 +153,9 @@ export function enableTimelineWidth(): void {
   window.addEventListener('resize', scheduleLayout);
   // 右栏显示 / 隐藏会改变可用宽度：sidebar 切换后广播 te:layout，这里跟随重算
   document.addEventListener('te:layout', scheduleLayout);
+  // SPA 导航（home / explore / 详情页切换）会重建主列子树、替换三栏行容器：
+  // 路由切换是低频事件，直接重算一次即可，无需等 DOM 批次里发现存在性跃迁。
+  onRouteChanged(() => scheduleLayout());
 
   // 主列可能在任意时刻被 React 挂载 / 替换（SPA 导航），订阅共享 DOM 批次即可。
   // 判断采用「主列 / 右栏的存在性跃迁」：每批（120ms 一次）只做两个 querySelector

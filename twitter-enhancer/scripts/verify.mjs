@@ -52,8 +52,8 @@ function createWindow(html = HTML) {
   const { window } = dom;
   // jsdom 默认视口 1024，低于脚本的 1095 断点会直接走「不放大」分支；放宽到 1440
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
-  // 媒体锁定用 offsetWidth / offsetHeight 判断宿主与计算占位补偿；
-  // 带 data-w / data-h 的元素返回指定值（jsdom 无布局引擎，默认为 0）
+  // 部分断言依赖 offsetWidth / offsetHeight（jsdom 无布局引擎，默认为 0）；
+  // 带 data-w / data-h 的元素返回指定值
   Object.defineProperty(window.HTMLElement.prototype, 'offsetWidth', {
     configurable: true,
     get() {
@@ -240,7 +240,7 @@ expect('菜单含推文新样式开关', labels().some((l) => l.includes('推文
 expect('菜单含右侧栏开关', labels().some((l) => l.includes('右侧栏：隐藏')), true);
 expect('菜单含宽时间线开关', labels().some((l) => l.includes('宽时间线（800px）：开')), true);
 expect('菜单含导航条搜索框开关', labels().some((l) => l.includes('导航条搜索框：开')), true);
-expect('菜单含图片锁定开关', labels().some((l) => l.includes('图片锁定原生尺寸：开')), true);
+expect('菜单含媒体高度钳制开关', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：开')), true);
 
 const sidebarItem = [...menu.values()].find((item) => item.label.includes('右侧栏'));
 sidebarItem.fn();
@@ -248,7 +248,6 @@ await sleep(30);
 expect('点击菜单后右栏变为显示', w5.document.documentElement.dataset.teSidebar, 'on');
 expect('菜单文案随状态刷新', labels().some((l) => l.includes('右侧栏：显示')), true);
 expect('刷新后菜单项数量不变', menu.size, 5);
-
 // 宽时间线开关：关闭后主列交回 X 原生，行不再被撑开
 const wideItem = [...menu.values()].find((item) => item.label.includes('宽时间线'));
 wideItem.fn();
@@ -260,6 +259,15 @@ wideItem.fn();
 await sleep(30);
 expect('再次点击恢复宽时间线', w5.document.documentElement.dataset.teTimeline, 'wide');
 
+// 媒体高度钳制开关（宽列下超高媒体 contain 缩到一屏内，关闭后全部还原）
+const capItem = [...menu.values()].find((item) => item.label.includes('媒体高度钳制'));
+capItem.fn();
+await sleep(30);
+expect('关闭媒体钳制菜单文案刷新', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：关')), true);
+capItem.fn();
+await sleep(30);
+expect('再次点击恢复媒体钳制', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：开')), true);
+
 // 导航条搜索框开关
 const searchItem = [...menu.values()].find((item) => item.label.includes('导航条搜索框'));
 searchItem.fn();
@@ -270,160 +278,6 @@ expect('搜索框菜单文案刷新', labels().some((l) => l.includes('导航条
 searchItem.fn();
 await sleep(30);
 expect('再次点击恢复搜索框', w5.document.documentElement.dataset.teSearch, 'on');
-
-// 图片锁定开关：关闭后清除缩放样式
-const lockItem = [...menu.values()].find((item) => item.label.includes('图片锁定原生尺寸'));
-lockItem.fn();
-await sleep(30);
-expect('关闭图片锁定后属性清除', Boolean(w5.document.querySelector('[data-te-media-locked]')), false);
-expect('图片锁定菜单文案刷新', labels().some((l) => l.includes('图片锁定原生尺寸：关')), true);
-lockItem.fn();
-await sleep(30);
-expect('再次点击恢复图片锁定', labels().some((l) => l.includes('图片锁定原生尺寸：开')), true);
-
-// ================= 实例十一：媒体宿主缩放计算 =================
-const HTML_MEDIA = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn" style="width:800px">
-    <article>
-      <div id="carousel" data-w="766" data-h="792">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-      <div id="singleWrap" data-w="718" data-h="512">
-        <div data-testid="videoPlayer"></div>
-      </div>
-      <div id="tall" data-w="566" data-h="900">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-      <div id="small" data-w="500" data-h="300">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-      <div id="giant" data-w="400" data-h="9604">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-      <div id="giantWide" data-w="766" data-h="9604">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-    </article>
-  </div>
-</body></html>`;
-
-const w11 = createWindow(HTML_MEDIA);
-w11.eval(script);
-await sleep(120);
-const carousel = w11.document.getElementById('carousel');
-const singleWrap = w11.document.getElementById('singleWrap');
-const tall = w11.document.getElementById('tall');
-const small = w11.document.getElementById('small');
-const scaleOf = (el) => Number.parseFloat((el.style.transform.match(/scale\(([\d.]+)\)/) || [])[1] || '0');
-// 缩放因子 = min(1, 566/宽, 540/高)
-expect(
-  '轮播被高度钳制（min(0.739, 0.682) = 0.682）',
-  Math.round(scaleOf(carousel) * 1000) / 1000,
-  Math.round(Math.min(566 / 766, 540 / 792) * 1000) / 1000,
-);
-expect(
-  '单图/视频按宽度钳制（高未超限）',
-  Math.round(scaleOf(singleWrap) * 1000) / 1000,
-  Math.round((566 / 718) * 1000) / 1000,
-);
-expect('竖长图被高度钳到 0.6（900 → 540）', Math.round(scaleOf(tall) * 1000) / 1000, 0.6);
-expect('不超限的媒体不被缩放', scaleOf(small), 0);
-// 虚拟列表类超高容器不是媒体区：窄的不命中宿主，宽的触发 2.5 屏护栏
-const giant = w11.document.getElementById('giant');
-const giantWide = w11.document.getElementById('giantWide');
-expect('窄而超高的容器不被识别为宿主', giant.dataset.teMediaLocked, undefined);
-expect('超 2.5 屏高的宿主被护栏跳过', giantWide.style.transform, '');
-expect('竖长图无缩放残留标记外样式', tall.style.transformOrigin, 'top left');
-expect(
-  '轮播占位高度补偿为负 margin',
-  carousel.style.marginBottom,
-  `${-Math.round(792 * (1 - Math.min(566 / 766, 540 / 792)))}px`,
-);
-expect('竖长图占位补偿', tall.style.marginBottom, `${-Math.round(900 * 0.4)}px`);
-
-// ================= 实例十二：轮播复合锁定（真机踩坑） =================
-// 轮播行 766 内同时有大图格（716，自身够格被锁）与小图格（306，不够格、
-// 向上爬会命中轮播行）——若两层都锁，缩放叠加 0.79 × 0.74 图片被压到一半。
-// 规则：嵌套锁定只保留最外层，外层锁内层解锁；已被外层覆盖的媒体跳过。
-const HTML_CAROUSEL = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn"><article>
-    <div id="crow" data-w="766" data-h="510">
-      <div id="cbig" data-w="716" data-h="500">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-      <div id="csmall" data-w="306" data-h="510">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-    </div>
-  </article></div>
-</body></html>`;
-const w12 = createWindow(HTML_CAROUSEL);
-w12.eval(script);
-await sleep(120);
-const crow = w12.document.getElementById('crow');
-const cbig = w12.document.getElementById('cbig');
-const csmall = w12.document.getElementById('csmall');
-expect('轮播行被锁定（最外层生效）', crow.dataset.teMediaLocked, '1');
-expect(
-  '轮播行缩放为宽度钳制（566/766）',
-  Math.round(scaleOf(crow) * 1000) / 1000,
-  Math.round((566 / 766) * 1000) / 1000,
-);
-expect('行内大图的宿主冗余锁定被解除', cbig.dataset.teMediaLocked, undefined);
-expect('大图宿主无缩放残留', cbig.style.transform, '');
-expect('小图格自身不锁（由外层覆盖）', csmall.dataset.teMediaLocked, undefined);
-expect(
-  '页面内不存在嵌套锁定',
-  w12.document.querySelectorAll('[data-te-media-locked] [data-te-media-locked]').length,
-  0,
-);
-
-// ================= 实例十三：历史嵌套锁定归一化 + 关闭开关真正清除 =================
-// 修复前可能残留「内外各锁一层」的坏状态；新版本扫描时必须归一化。
-// 另外 resetMediaLock 的选择器曾写成 [data-teMediaLocked]（匹配不到
-// data-te-media-locked），关闭开关后缩放残留——这里一并回归。
-const HTML_NESTED = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn"><article>
-    <div id="outerStale" data-w="766" data-h="510" data-te-media-locked="1"
-         style="transform: scale(0.695); margin-bottom: -237px">
-      <div id="innerStale" data-w="716" data-h="500" data-te-media-locked="1"
-           style="transform: scale(0.7905); margin-bottom: -105px">
-        <div data-testid="tweetPhoto"><img /></div>
-      </div>
-    </div>
-  </article></div>
-</body></html>`;
-const w13 = createWindow(HTML_NESTED);
-w13.eval(script);
-await sleep(120);
-const outerStale = w13.document.getElementById('outerStale');
-const innerStale = w13.document.getElementById('innerStale');
-expect('外层锁定保留', outerStale.dataset.teMediaLocked, '1');
-expect('内层冗余锁定被解除', innerStale.dataset.teMediaLocked, undefined);
-expect('内层缩放样式被清除', innerStale.style.transform, '');
-expect('内层占位补偿被清除', innerStale.style.marginBottom, '');
-
-// 关闭状态持久化：localStorage 预置 media-lock=false，脚本加载后不得加锁
-const HTML_PREF = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn"><article>
-    <div id="pwrap" data-w="716" data-h="500">
-      <div data-testid="tweetPhoto"><img /></div>
-    </div>
-  </article></div>
-</body></html>`;
-const w14 = createWindow(HTML_PREF);
-w14.localStorage.setItem('twitter-enhancer:media-lock', 'false');
-w14.eval(script);
-await sleep(150);
-const pwrap = w14.document.getElementById('pwrap');
-expect('关闭状态下加载脚本不锁定媒体', pwrap.dataset.teMediaLocked, undefined);
-expect('关闭状态下无缩放样式', pwrap.style.transform, '');
-
-const uiItem = [...menu.values()].find((item) => item.label.includes('推文新样式'));
-uiItem.fn();
-await sleep(30);
-expect('点击菜单后推文样式关闭', w5.document.documentElement.dataset.teUi, 'off');
-expect('推文样式菜单文案刷新', labels().some((l) => l.includes('推文新样式：关')), true);
 
 // ================= 实例六：真实 DOM 结构（logo 是 nav 的兄弟） =================
 // 结构取自 2026-09 实测：内栏 flex column → [logo 行, nav 容器, 发帖按钮]，
@@ -542,50 +396,6 @@ const theme15 = w15.document.documentElement.dataset.teTheme;
 expect('透明背景回退系统偏好而非误判暗色', theme15 === 'dark', false);
 expect('透明背景下主题已写入（light）', theme15, 'light');
 
-// ================= 实例十五：滚动新增媒体走增量锁定 =================
-// 初始无媒体 → 模拟滚动时 React 追加一条含图片的推文（宿主 716×500）。
-// dom-watch 单例以 120ms 合并派发，增量路径应锁定新宿主（而非全站重扫）。
-const HTML_LATE_MEDIA = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn"><article id="feed"></article></div>
-</body></html>`;
-const w16 = createWindow(HTML_LATE_MEDIA);
-w16.eval(script);
-await sleep(150);
-const feed = w16.document.getElementById('feed');
-const lateHost = w16.document.createElement('div');
-lateHost.id = 'lateWrap';
-lateHost.setAttribute('data-w', '716');
-lateHost.setAttribute('data-h', '500');
-lateHost.innerHTML = '<div data-testid="tweetPhoto"><img /></div>';
-feed.appendChild(lateHost);
-await sleep(260); // 等 dom-watch 合并冲刷 + rAF 时间片
-const scale16 = Number.parseFloat(
-  (lateHost.style.transform.match(/scale\(([\d.]+)\)/) || [])[1] || '0',
-);
-expect('滚动新增媒体宿主被锁定', lateHost.dataset.teMediaLocked, '1');
-expect('新增媒体缩放为宽度钳制（566/716）', Math.round(scale16 * 1000) / 1000, Math.round((566 / 716) * 1000) / 1000);
-
-// ================= 实例十六：布局回落（te:layout）后已锁宿主自动解锁 =================
-// 宿主 718 宽被锁（scale 566/718）；主列回落后宿主宽度变为 500（低于锁定值），
-// sidebar / timeline 切换会广播 te:layout，此时应解除缩放而不是残留。
-const HTML_SHRINK = `<!doctype html><html><head></head><body>
-  <div data-testid="primaryColumn"><article>
-    <div id="shrinkWrap" data-w="718" data-h="512">
-      <div data-testid="videoPlayer"></div>
-    </div>
-  </article></div>
-</body></html>`;
-const w17 = createWindow(HTML_SHRINK);
-w17.eval(script);
-await sleep(150);
-const shrinkWrap = w17.document.getElementById('shrinkWrap');
-expect('宽宿主先被锁定', shrinkWrap.dataset.teMediaLocked, '1');
-shrinkWrap.setAttribute('data-w', '500'); // 布局回落：宽度低于锁定值
-w17.document.dispatchEvent(new w17.CustomEvent('te:layout'));
-await sleep(30);
-expect('布局回落后已锁宿主解除标记', shrinkWrap.dataset.teMediaLocked, undefined);
-expect('布局回落后缩放样式被清除', shrinkWrap.style.transform, '');
-
 // ================= 实例十七：滚动新增的写死宽度容器被增量解锁 =================
 // 初始容器内已解锁；模拟 React 无限加载追加一条写死 600px 的新推文。
 // 增量路径应识别并打上标记（无需整树重扫旧节点）。
@@ -601,6 +411,96 @@ timeline18.appendChild(lateLocked);
 await sleep(200); // 等 dom-watch 合并 + rAF 时间片
 expect('滚动新增的 600px 容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
 expect('既有解锁标记未被打乱', w18.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
+// ================= 实例十一：SPA 导航后布局自动重算 =================
+// X 是 React SPA，站内导航不触发 load；脚本通过 hook history.pushState 广播 te:route。
+// 模拟 React 在导航时替换三栏行容器（锚点 / min-width 随旧节点丢失），
+// 断言路由切换后新行被重新撑开、右栏锚点被重新写入。
+const HTML_RAIL2 = HTML_RAIL.replace(
+  '<div id="row" style="display:flex">',
+  '<div id="row2" style="display:flex">',
+);
+const w11 = createWindow(HTML_RAIL2);
+// false = 显示右栏（锚定路径覆盖更全：min-width 撑开 + margin-left 锚定同时生效）
+w11.localStorage.setItem('twitter-enhancer:sidebar', 'false');
+w11.eval(script);
+await sleep(120);
+const row11a = w11.document.getElementById('row2');
+expect('初始状态行被撑开', row11a.style.minWidth, '800px');
+expect('初始状态右栏已锚定', w11.document.querySelector('[data-testid="sidebarColumn"]').style.marginLeft, '30px');
+
+// 模拟 SPA 导航：React 替换三栏行容器并把右栏移入新行，旧样式随旧节点消失
+const row11b = w11.document.createElement('div');
+row11b.id = 'row2-new';
+row11b.style.display = 'flex';
+const primary11b = w11.document.createElement('div');
+primary11b.setAttribute('data-testid', 'primaryColumn');
+primary11b.style.width = '800px';
+row11b.appendChild(primary11b);
+const sidebar11 = w11.document.querySelector('[data-testid="sidebarColumn"]');
+sidebar11.style.marginLeft = '';
+row11b.appendChild(sidebar11);
+w11.document.getElementById('row2').replaceWith(row11b);
+// 主列选择器按 data-testid 命中新容器；history.pushState 触发路由广播
+w11.history.pushState({}, '', '/explore');
+await sleep(120);
+const row11b2 = w11.document.getElementById('row2-new');
+expect('SPA 导航后新行被重新撑开', row11b2.style.minWidth, '800px');
+expect(
+  'SPA 导航后右栏锚点重新写入',
+  w11.document.querySelector('[data-testid="sidebarColumn"]').style.marginLeft,
+  '30px',
+);
+
+// ================= 实例十二：宽列媒体高度钳制 =================
+// 800 宽列下横排轮播的竖长行无 X 原生钳制，实测行高可达 774~898px，超过一屏
+// （加正文/操作栏后必须滚轮才能看全）。宿主 = 媒体向上第一个宽度 ≥ lockWidth
+// 且不含正文的祖先。方案 = 只改宿主 layout height 到预算（X 轮播格按内联
+// aspect-ratio 随行高自动重排，比例不变、不裁剪、无 transform 双重缩放）。
+// 媒体回落到预算内（列宽回落 / 媒体变小）后自动解锁还原。
+const HTML_MEDIA = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a><a href="/explore">探索</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="mcWrap" data-w="718" data-h="900" style="padding-bottom: calc(100% - 4px)">
+          <div id="mcRegion" data-w="718" data-h="774">
+            <div data-testid="tweetPhoto">图片</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wMedia = createWindow(HTML_MEDIA);
+wMedia.eval(script);
+await sleep(180);
+const regionM = wMedia.document.getElementById('mcRegion');
+const wrapM = wMedia.document.getElementById('mcWrap');
+expect('宽列超高媒体行宿主被钳制', regionM.dataset.teMediaCapped, '1');
+// 预算 = min(540, 视口高−220=548) = 540：只把宿主 layout 高度压到 540
+expect('宿主 layout 高度压到预算（540）', regionM.style.height, '540px');
+expect('只改高度、不加 transform（避免双重缩放）', regionM.style.transform, '');
+// 宿主上方的纯包裹层（只含该媒体子链）若被 X 写死行高/用百分比 padding 撑高，
+// 会留下冗余空白：必须与宿主一起压到预算，百分比 padding 盒同步归零 padding。
+expect('纯包裹层一并压到预算', wrapM.style.height, '540px');
+expect('包裹层也打上钳制标记', wrapM.dataset.teMediaCapped, '1');
+expect('百分比 padding 比例盒的 padding 归零', wrapM.style.paddingBottom, '0px');
+
+// 媒体尺寸回落到预算内（如主列宽回落 / 媒体变小）→ te:layout 对账自动解锁
+regionM.setAttribute('data-w', '300');
+regionM.setAttribute('data-h', '300');
+wrapM.setAttribute('data-w', '300');
+wrapM.setAttribute('data-h', '300');
+wMedia.document.dispatchEvent(new wMedia.CustomEvent('te:layout'));
+await sleep(300); // 对账带 120ms 去抖，等它跑完
+expect('媒体回落到预算内自动解锁', regionM.dataset.teMediaCapped, undefined);
+expect('包裹层同步解锁', wrapM.dataset.teMediaCapped, undefined);
+expect('解锁后清除 height', regionM.style.height, '');
+expect('解锁后清除包裹层 height', wrapM.style.height, '');
+expect('解锁后还原包裹层原始 padding', wrapM.style.paddingBottom, 'calc(100% - 4px)');
 
 // ================= 输出 =================
 let failed = 0;

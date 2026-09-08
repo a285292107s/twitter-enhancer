@@ -33,13 +33,13 @@ export const CONFIG: {
      */
     anchor: boolean;
   };
-  /** 媒体（图片 / 视频）尺寸（详见 features/media-lock.ts） */
+  /** 媒体高度钳制（详见 features/media-cap.ts）：宽列下超高竖图/轮播行不超出一屏 */
   media: {
-    /** 锁定媒体显示尺寸：主列加宽后图片 / 视频保持原生（600 布局）大小 */
-    lock: boolean;
-    /** 锁定的媒体区宽度（px）。600 = X 原生主列宽，566 = 600 布局的推文内容宽（600 − 32 padding） */
+    /** 是否默认开启（可用油猴菜单实时切换） */
+    cap: boolean;
+    /** 宿主识别宽度下限（px）：媒体祖先 ≥ 该宽才视为「整行媒体区」而非单格/单图 */
     lockWidth: number;
-    /** 媒体最大显示高度（px）：竖图再长也被钳到该值内，无需滚动页面即可看全 */
+    /** 媒体行最大显示高度（px）：超高媒体被钳到该值，整幅一屏内可看全 */
     maxHeight: number;
   };
   /** 搜索框迁移到左侧导航条 */
@@ -71,7 +71,7 @@ export const CONFIG: {
     anchor: true,
   },
   media: {
-    lock: true,
+    cap: true,
     lockWidth: 566,
     maxHeight: 540,
   },
