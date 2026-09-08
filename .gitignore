@@ -15,3 +15,11 @@ node_modules/
 # Logs
 logs
 *.log
+
+# 独立自动化浏览器（playwright-cli x-te）：登录态与本地快照，永不提交
+browser-profiles/
+.playwright-cli/
+
+# 登录态导出文件（x.com 会话等，含凭据，任何位置/变体名都禁止提交）
+auth*.json
+cookie*.json
