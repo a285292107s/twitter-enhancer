@@ -1,0 +1,370 @@
+/**
+ * 页内设置面板（右下角设置按钮 + 设置弹窗）。
+ *
+ * 约束：
+ * 1. 只用自己的 `te-settings-*` 类名，不碰 X 的哈希 class；
+ * 2. 配色跟随 X 主题：主题判定由 tweet-ui 写在 html[data-te-theme]（light / dim / dark），
+ *    令牌统一加 `--te-set-` 前缀，避免与 tweet-ui.css 的 `--te-*` 令牌撞名；
+ * 3. X 的全局样式会命中 button / kbd 等元素，自绘控件把 appearance / border / background /
+ *    font 全写出来，不吃继承来的意外值；
+ * 4. 过渡只动 color / background-color / opacity / transform，不动 width / height（不引起布局抖动）。
+ */
+
+/* ===== 令牌：亮色（默认，与 X Light 一致） ===== */
+:root {
+  --te-set-surface: #ffffff;
+  --te-set-surface-2: #f7f9f9;
+  --te-set-text: #0f1419;
+  --te-set-text-dim: #536471;
+  --te-set-border: rgba(0, 0, 0, 0.1);
+  --te-set-hover: rgba(0, 0, 0, 0.04);
+  --te-set-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+  --te-set-accent: #1d9bf0;
+  --te-set-track-off: rgba(83, 100, 113, 0.4);
+  --te-set-thumb: #ffffff;
+  --te-set-scrim: rgba(0, 0, 0, 0.4);
+  /* 设置按钮兜底外观：与 X 的 Grok / 私信悬浮按钮同款（2026-09-13 实测的亮色值） */
+  --te-set-fab-bg: rgba(255, 255, 255, 0.85);
+  --te-set-fab-border: rgb(159, 181, 195);
+  --te-set-fab-fg: #0f1419;
+  --te-set-fab-shadow: rgba(101, 119, 134, 0.2) 0 0 15px 0, rgba(101, 119, 134, 0.15) 0 0 3px 1px;
+}
+
+/* ===== 令牌：Dim（#15202B） ===== */
+html[data-te-theme='dim'] {
+  --te-set-surface: #15202b;
+  --te-set-surface-2: #1e2732;
+  --te-set-text: #e7e9ea;
+  --te-set-text-dim: #8b98a5;
+  --te-set-border: rgba(255, 255, 255, 0.12);
+  --te-set-hover: rgba(255, 255, 255, 0.06);
+  --te-set-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --te-set-track-off: rgba(139, 152, 165, 0.5);
+  --te-set-thumb: #f7f9f9;
+  --te-set-scrim: rgba(0, 0, 0, 0.55);
+  /* X 暗色主题按钮同一套（styles 里只找到 rgba(45,45,45,0.85) 这一个暗色变体） */
+  --te-set-fab-bg: rgba(45, 45, 45, 0.85);
+  --te-set-fab-border: rgba(255, 255, 255, 0.2);
+  --te-set-fab-fg: #e7e9ea;
+  --te-set-fab-shadow: rgba(0, 0, 0, 0.45) 0 0 15px 0, rgba(0, 0, 0, 0.3) 0 0 3px 1px;
+}
+
+/* ===== 令牌：Dark（纯黑） ===== */
+html[data-te-theme='dark'] {
+  --te-set-surface: #000000;
+  --te-set-surface-2: #16181c;
+  --te-set-text: #e7e9ea;
+  --te-set-text-dim: #8b98a5;
+  --te-set-border: rgba(255, 255, 255, 0.14);
+  --te-set-hover: rgba(255, 255, 255, 0.07);
+  --te-set-shadow: 0 12px 32px rgba(0, 0, 0, 0.7);
+  --te-set-track-off: rgba(139, 152, 165, 0.5);
+  --te-set-thumb: #f7f9f9;
+  --te-set-scrim: rgba(0, 0, 0, 0.6);
+  --te-set-fab-bg: rgba(45, 45, 45, 0.85);
+  --te-set-fab-border: rgba(255, 255, 255, 0.2);
+  --te-set-fab-fg: #e7e9ea;
+  --te-set-fab-shadow: rgba(0, 0, 0, 0.45) 0 0 15px 0, rgba(0, 0, 0, 0.3) 0 0 3px 1px;
+}
+
+/* ===== 右下角设置按钮（Grok 按钮正上方） =====
+   尺寸 / 圆角 / 图标大小与 X 自己的悬浮按钮一致（55×55 / 16px / 32px，2026-09-13 实测），
+   JS 还会镜像 X 按钮的实时计算样式（见 settings-panel.ts 的 syncFabLook）；
+   下面的令牌是页面里读不到 X 按钮时的兜底（如 /i/grok），取值按 X 亮色按钮抄。 */
+.te-settings-fab {
+  position: fixed;
+  /* 真实位置由 JS 按 X 右下角抽屉列的几何写入（见 settings-panel.ts），
+     这里的值是「容器都不在」时的兜底（实测 1280×720：Grok 按钮底边距 79 + 高 55 + 间距 12） */
+  right: 20px;
+  bottom: 146px;
+  z-index: 2147483000;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 55px;
+  height: 55px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 1px solid var(--te-set-fab-border);
+  border-radius: 16px;
+  background: var(--te-set-fab-bg);
+  color: var(--te-set-fab-fg);
+  box-shadow: var(--te-set-fab-shadow);
+  cursor: pointer;
+  transition:
+    background-color 180ms cubic-bezier(0.2, 0, 0, 1),
+    color 180ms cubic-bezier(0.2, 0, 0, 1),
+    transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-fab:hover {
+  color: var(--te-set-accent);
+}
+
+.te-settings-fab:active {
+  transform: scale(0.96);
+}
+
+.te-settings-fab:focus-visible {
+  outline: 2px solid var(--te-set-accent);
+  outline-offset: 2px;
+}
+
+/* 弹窗打开时轻微压暗，明确「按钮与弹窗」的对应关系
+   （镜像写的是内联 background-color，所以这里用 filter 叠加而不是改背景色） */
+.te-settings-fab[aria-expanded='true'] {
+  filter: brightness(0.94);
+}
+
+.te-settings-fab svg {
+  display: block;
+  width: var(--te-set-fab-icon, 32px);
+  height: var(--te-set-fab-icon, 32px);
+}
+
+/* ===== 弹窗 ===== */
+.te-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483100;
+  box-sizing: border-box;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--te-set-scrim);
+  backdrop-filter: blur(2px);
+}
+
+/* 显隐只由属性控制：节点常驻，DOM 结构稳定（验证脚本也按这个属性断言） */
+.te-settings-overlay[data-te-settings-open='true'] {
+  display: flex;
+}
+
+.te-settings-dialog {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 420px;
+  max-height: min(560px, calc(100vh - 48px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 20px 20px 14px;
+  border: 1px solid var(--te-set-border);
+  border-radius: 20px;
+  background: var(--te-set-surface);
+  color: var(--te-set-text);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: var(--te-set-shadow);
+  animation: te-settings-in 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-dialog:focus {
+  outline: none;
+}
+
+@keyframes te-settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- 头部 --- */
+.te-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.te-settings-heading {
+  min-width: 0;
+}
+
+.te-settings-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--te-set-text);
+}
+
+.te-settings-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--te-set-text-dim);
+}
+
+.te-settings-close {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--te-set-text-dim);
+  cursor: pointer;
+  transition:
+    background-color 180ms cubic-bezier(0.2, 0, 0, 1),
+    color 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-close:hover {
+  background: var(--te-set-hover);
+  color: var(--te-set-text);
+}
+
+.te-settings-close:focus-visible {
+  outline: 2px solid var(--te-set-accent);
+  outline-offset: 2px;
+}
+
+.te-settings-close svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* --- 分组与开关行 --- */
+.te-settings-group {
+  margin-top: 16px;
+}
+
+.te-settings-group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--te-set-text-dim);
+}
+
+.te-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 -8px;
+  padding: 8px;
+  border-radius: 12px;
+  transition: background-color 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-row:hover {
+  background: var(--te-set-hover);
+}
+
+.te-settings-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.te-settings-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--te-set-text);
+}
+
+.te-settings-desc {
+  font-size: 12px;
+  color: var(--te-set-text-dim);
+}
+
+.te-settings-kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--te-set-border);
+  border-radius: 5px;
+  background: var(--te-set-surface-2);
+  color: var(--te-set-text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* --- 自绘开关（role="switch"，状态写在 aria-checked 上） --- */
+.te-settings-switch {
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--te-set-track-off);
+  cursor: pointer;
+  transition: background-color 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--te-set-thumb);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.te-settings-switch[aria-checked='true'] {
+  background: var(--te-set-accent);
+}
+
+.te-settings-switch[aria-checked='true']::after {
+  transform: translateX(18px);
+}
+
+.te-settings-switch:focus-visible {
+  outline: 2px solid var(--te-set-accent);
+  outline-offset: 2px;
+}
+
+/* --- 页脚 --- */
+.te-settings-foot {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--te-set-border);
+  font-size: 11px;
+  color: var(--te-set-text-dim);
+}
+
+/* --- 无障碍：尊重系统的「减少动态效果」偏好 --- */
+@media (prefers-reduced-motion: reduce) {
+  .te-settings-dialog {
+    animation: none;
+  }
+
+  .te-settings-fab,
+  .te-settings-close,
+  .te-settings-row,
+  .te-settings-switch,
+  .te-settings-switch::after {
+    transition: none;
+  }
+}

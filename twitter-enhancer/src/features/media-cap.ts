@@ -2,8 +2,8 @@
  * 宽列媒体高度钳制（宽时间线真正放宽后生效）。
  *
  * 背景（真机实测 2026-09）：横排轮播的竖长图行有时超过一屏高，必须滚动滚轮
- * 才能完整浏览——800 宽列下实测轮播行高 774~898px（加正文/操作栏后必然超出
- * 一屏）。单图竖长图 X 自己会钳到约 510 高，不在此列。
+ * 才能完整浏览——800 宽列下实测轮播行高 774~898px（列铺满内容区后按宽度比例更高），
+ * 加正文/操作栏后必然超出一屏。单图竖长图 X 自己会钳到约 510 高，不在此列。
  *
  * 方案：对「媒体行宿主」只钳 **layout height**，不施加 transform——
  * 实测确认 X 的媒体行（轮播格带内联 aspect-ratio）会按行高自动重排：
@@ -34,7 +34,7 @@
  *   visibilitychange / dom-watch overflow）仍走 120ms 去抖的全量对账。
  */
 import { CONFIG } from '../config';
-import { registerToggleMenu } from '../lib/menu';
+import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
@@ -348,6 +348,7 @@ function toggleCap(): void {
   locked = !locked;
   reconcileMediaCap();
   void writeFlag('media-cap', locked);
+  notifySettingsChanged();
 }
 
 export function enableMediaCap(): void {
@@ -411,9 +412,11 @@ export function enableMediaCap(): void {
     if (!document.hidden && locked) scheduleReconcile();
   });
 
-  registerToggleMenu({
-    label: (enabled) =>
-      `媒体高度钳制（超高媒体 ≤${CONFIG.media.maxHeight}px 一屏看全）：${enabled ? '开' : '关'}`,
+  registerSetting({
+    id: 'media-cap',
+    group: '内容',
+    label: '媒体高度钳制',
+    description: `超高竖图 / 轮播压到 ${CONFIG.media.maxHeight}px 内，一屏看全`,
     isEnabled: () => locked,
     toggle: toggleCap,
   });

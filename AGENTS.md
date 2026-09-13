@@ -9,15 +9,19 @@
 
 - **twitter-enhancer**：油猴脚本（vite + vite-plugin-monkey + TS），优化 x.com 网页。
   源码在 `twitter-enhancer/src/`，构建产物 `twitter-enhancer/dist/twitter-enhancer.user.js`。
-- 主要功能：宽时间线（主列 600→800）、推文 UI 重设计、右栏搜索迁移、媒体高度钳制
-  （`media-cap`：宽列下超高轮播/竖图缩到一屏内，只改 layout height、链式压纯媒体祖先）。
+- 主要功能：宽时间线（右栏隐藏时主列铺满 X 内容区、与 `/i/grok` 一致；右栏显示时 ≤800。
+  左导航条不写任何样式 —— X 自己的 fixed 定位已与主列左缘对齐）、
+  推文 UI 重设计、右栏搜索迁移、媒体高度钳制
+  （`media-cap`：宽列下超高轮播/竖图缩到一屏内，只改 layout height、链式压纯媒体祖先）、
+  页内设置面板（右下角设置按钮在 X 的 Grok 悬浮按钮正上方，弹窗统一放各功能开关）。
 
 ## 2. 代码门禁（改代码前先读）
 
 - 回归门禁：在 `twitter-enhancer/` 下运行 **`npm run verify`**（= `tsc && vite build` + jsdom 回归 `scripts/verify.mjs`），提交/交付前必须全绿。
-- 新增功能必须注册进 `src/features/index.ts` 并**在 `verify.mjs` 补断言**（含菜单数量：每个带菜单开关的功能都会 +1）。
-- 菜单/存储：开关经 `src/lib/menu.ts`（GM 菜单，label 带状态文案）与 `src/lib/store.ts`
-  （GM+localStorage 双写，key 前缀 `twitter-enhancer:`）。
+- 新增功能必须注册进 `src/features/index.ts` 并**在 `verify.mjs` 补断言**（含设置项数量：每登记一个开关，设置面板就 +1 行）。
+- 开关/存储：开关经 `src/lib/settings.ts` 注册（`registerSetting`，渲染进页内设置面板
+  `src/features/settings-panel.ts`；**不再往油猴菜单里挂**，也没有 GM 菜单授权了），
+  状态经 `src/lib/store.ts`（GM+localStorage 双写，key 前缀 `twitter-enhancer:`）。
 - 不要硬编码 X 的哈希 class（css-xxxx）；选择器锚定 `data-testid` 等稳定属性。
 - 大版本重构删除旧功能时，同步清理 `config.ts` / `index.ts` / `verify.mjs` 中对应引用。
 
@@ -74,8 +78,9 @@ playwright-cli -s=x-te delete-data
 `@playwright/cli` 内置的 playwright 模块 + 缓存内核，headless 起独立持久 profile
 `browser-profiles/x-te-e2e`（已 gitignore），用 addInitScript 在 document-start 时序
 **先注入 `scripts/e2e/gm-shim.js`（只补 GM_addStyle，见文件头注释）再注入
-`dist/twitter-enhancer.user.js`**，然后断言真实布局几何（宽列 800 / 右栏隐藏 /
-Alt+B 切换 / 媒体钳制与解锁）。
+`dist/twitter-enhancer.user.js`**，然后断言真实布局几何（右栏隐藏时主列铺满内容区 980 /
+左缘不动 / Alt+B 切换右栏 / 媒体钳制与解锁 / home↔grok 切 tab 逐帧零布局变化 /
+设置按钮落在 Grok 悬浮按钮正上方且弹窗开关真的改变布局）。
 
 ```powershell
 # 先构建，再跑（登录态自动从仓库根 auth.json 导入；之后随 profile 持久化）
@@ -85,8 +90,8 @@ npm run e2e:real
 ```
 
 - 覆盖/不覆盖：能验真实布局引擎下的几何、结构兼容与 document-start 时序；
-  **不覆盖油猴菜单 UI 与真 GM_* 语义**（有意只 shim GM_addStyle，其余走仓库
-  localStorage / no-op 降级路径）。发布冒烟仍需装一次真 Tampermonkey。
+  **不覆盖真 GM_* 语义**（有意只 shim GM_addStyle，其余走仓库 localStorage / no-op
+  降级路径 —— 页内设置面板是普通 DOM，走 e2e 正常覆盖）。发布冒烟仍需装一次真 Tampermonkey。
 - 浏览器铁律同 `x-te`：headless、独立 profile、不碰用户浏览器。脚本依赖全局
   `@playwright/cli`，迁移机器时需改 `resolvePlaywright()`。
 
@@ -124,3 +129,16 @@ npm run e2e:real
 - 新文件/关键逻辑写中文注释，注明"实测数值/结构"出处与版本时间（如 `2026-09`）。
 - 分析结论如果进仓库，放在 `twitter-enhancer/design-system/` 或源码头部注释，别只留在对话里。
 - 涉及登录态/隐私的路径（`browser-profiles/`、`.workbuddy/`、`.agents/`）永不提交。
+
+## 6. 本地迭代：不用 vite dev 模式（x.com CSP 会拦）
+
+- **禁止**安装 `vite-plugin-monkey` 的 dev 模式脚本（脚本名带 `server:` 前缀，或在 `npm run dev`
+  打开的预览页里点的那个"安装"）：其实现是往页面注入
+  `<script type="module" src="http://127.0.0.1:5173/__vite-plugin-monkey.entry.js">`，
+  而 x.com 的 `Content-Security-Policy: script-src` 不含 localhost，注入被浏览器直接拦掉，
+  脚本在页面上**完全不生效**，控制台只留一条
+  `Loading the script 'http://127.0.0.1:5173/__vite-plugin-monkey.entry.js' violates ... script-src ...`。
+  若已装着，请在脚本管理器里删掉/禁用该 dev 脚本，改装 dist 产物。
+- 迭代流程：`npm run dev`（= `vite build --watch`，只重建 `dist/twitter-enhancer.user.js`）
+  → 把 dist 产物重新导入脚本管理器（手动一步，无 HMR）。
+- `grant` 里的 `GM_*` 由 dist 产物声明，与浏览器 CSP 无关，正常生效。

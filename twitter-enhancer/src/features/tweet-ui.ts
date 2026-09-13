@@ -5,7 +5,7 @@
  * 1. 主题适配：X 有 Light / Dim / Dark 三套主题，CSS 无法按计算样式选择元素，
  *    故由 JS 判定并写入 html[data-te-theme]，CSS 分支消费。
  * 2. 令牌注入：把 config 里的字号 / 行高 / 行长写成 CSS 变量，改 config 即生效。
- * 3. 开关：油猴菜单 + Alt+U 实时对比新旧样式，状态优先存脚本管理器（GM_setValue）。
+ * 3. 开关：页内设置面板 + Alt+U 实时对比新旧样式，状态优先存脚本管理器（GM_setValue）。
  *
  * document-start 崩溃修复（性能版）：
  * - 脚本在 document-start 注入时 document.body 为 null，旧版 detectTheme() 直接
@@ -17,7 +17,7 @@
  *   只观察两个元素、按属性过滤的窄观察器，不是滚动时的高频 subtree 观察。
  */
 import { CONFIG } from '../config';
-import { registerToggleMenu } from '../lib/menu';
+import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
 import './tweet-ui.css';
 
@@ -97,6 +97,7 @@ function setEnabled(value: boolean): void {
 function toggleTweetUi(): void {
   setEnabled(!enabled);
   void writeFlag('tweet-ui', enabled);
+  notifySettingsChanged();
 }
 
 export function enableTweetUi(): void {
@@ -145,8 +146,12 @@ export function enableTweetUi(): void {
     event.preventDefault();
   });
 
-  registerToggleMenu({
-    label: (on) => `推文新样式：${on ? '开' : '关'}`,
+  registerSetting({
+    id: 'tweet-ui',
+    group: '内容',
+    label: '推文新样式',
+    description: '正文 16px / 行高 1.5，重绘操作栏、引用卡片与媒体圆角',
+    shortcut: 'Alt+U',
     isEnabled: () => enabled,
     toggle: toggleTweetUi,
   });

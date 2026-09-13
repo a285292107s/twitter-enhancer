@@ -16,7 +16,10 @@
  * 5. 队列长度有上限（防虚拟滚动下无界增长），后台 rAF 冻结由 visibilitychange
  *    与 dom-watch 的兜底冲刷覆盖；
  * 6. 只在元素写死宽（560–660px 且明显窄于容器）时打 data-te-width-unlocked，
- *    由 CSS 放开到 100%。
+ *    由 CSS 放开到 100%；
+ * 7. 打标记本身不改变任何样式 —— 「放开到 100%」的 CSS 挂在宽时间线开关下。
+ *    因此开关关闭 / 主列是 X Chat 私信界面时，标记既不产生视觉效果又白耗全树
+ *    扫描，必须靠 isActive 停摆并撤销已有标记（见 options.isActive）。
  */
 
 import { onDomChanged } from './dom-watch';
@@ -33,6 +36,16 @@ export interface UnlockOptions {
   sliceSize?: number;
   /** 待检队列上限，防止虚拟滚动下无界增长 */
   maxQueue?: number;
+  /**
+   * 是否处于激活状态（默认恒为 true）。
+   *
+   * 解锁器只负责「打标记」，真正放开宽度的 CSS 由调用方挂在开关下。当调用方
+   * 判断宽度覆盖不会生效时（宽时间线开关关闭、主列里渲染的是 X Chat 私信
+   * 界面等），应返回 false：解锁器会清空待检队列并撤销全部标记，既不浪费
+   * 全树扫描，也不留下会让后续判断失真的悬挂标记。
+   * 由关转开时自动整树补扫（关闭期间新增的锁宽元素从未被检视过）。
+   */
+  isActive?: () => boolean;
 }
 
 /** 判断某个计算值是否为「写死的像素宽度且明显窄于容器」 */
@@ -50,6 +63,7 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
     tolerance: options.tolerance ?? 40,
     sliceSize: options.sliceSize ?? 300,
     maxQueue: options.maxQueue ?? 8000,
+    isActive: options.isActive ?? (() => true),
   };
 
   /** 已被处理过的元素（强引用；重置时用于清除标记） */
@@ -66,6 +80,8 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
   /** 上次完成全量扫描时的容器宽度 */
   let scannedWidth = -1;
   let stopped = false;
+  /** 上次同步到的激活状态（用于识别「关 → 开」跃迁，需要整树补扫） */
+  let active = true;
 
   /** 清除所有已打标记，使后续可重新计算 */
   function reset(): void {
@@ -99,6 +115,7 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
   function workSlice(): void {
     scheduled = false;
     if (stopped) return;
+    if (!ensureActive()) return;
     const c = ensureContainer();
     if (!c) return;
     const containerWidth = c.clientWidth;
@@ -139,9 +156,25 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
    * reset() 会把待检队列一并清空，此时直接 flush() 因队列为空不会调度任何
    * 扫描（旧版 overflow / resize 分支在此静默失效：标记被清掉但从未重扫）。
    */
-  function rescanAll(): void {
+  function fullRescan(): void {
     reset();
     if (ensureContainer()) fullScan();
+  }
+
+  /**
+   * 同步 isActive 状态，返回当前是否激活。
+   * - 由开转关：撤销全部标记 —— 宽度覆盖已失效，留着的标记只会让后续判断失真；
+   * - 由关转开：整树补扫 —— 关闭期间新增的锁宽元素从未被检视过，增量路径
+   *   也补不回来（队列在关闭时已被清空）。
+   * 状态不变时只做一次属性读取，代价可忽略，因此可以放心在热路径上调用。
+   */
+  function ensureActive(): boolean {
+    const next = opts.isActive();
+    if (next === active) return next;
+    active = next;
+    if (next) fullRescan();
+    else reset();
+    return next;
   }
 
   /** 保证容器存在：首现或容器被替换时全量扫一次并挂 ResizeObserver */
@@ -172,6 +205,7 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
 
   function flush(): void {
     if (stopped) return;
+    if (!ensureActive()) return;
     if (ensureContainer() && queue.length > 0) scheduleWork();
   }
 
@@ -179,6 +213,8 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
     /** 启动：立即扫描一次，并订阅共享 DOM 变更池做增量扫描 */
     start(): void {
       stopped = false;
+      // 初始状态先与调用方对齐，避免首帧就产生一次无谓的「关 → 开」补扫
+      active = opts.isActive();
       flush();
       domContentLoadedHandler = () => flush();
       if (document.readyState === 'loading') {
@@ -187,9 +223,19 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
       // 增量：订阅 dom-watch 单例共享的新增节点池
       unsubscribe = onDomChanged(({ added, overflow: hadOverflow }) => {
         if (stopped) return;
+        // 调用方可能在不触发 DOM 变更的情况下切换激活状态（菜单开关 / 路由
+        // 切换），这里兜底同步一次：非激活直接返回，关 → 开则整树补扫。
+        if (!ensureActive()) return;
         // overflow 说明单批新增超上限、池可能丢节点：宽列布局下宁可整树补扫一次
         if (hadOverflow) {
-          rescanAll();
+          fullRescan();
+          return;
+        }
+        // 主列被 React 整体替换（SPA 导航重挂 app shell）时旧容器已脱离文档：
+        // 此时 added 里的新节点都不在旧容器内，增量分支会把它们全部跳过，
+        // 解锁器会静默失效到下一次 resize —— 重新锁定新主列并整树补扫。
+        if (!container || !container.isConnected) {
+          fullRescan();
           return;
         }
         let any = false;
@@ -203,15 +249,26 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
         if (any) scheduleWork();
       });
       resizeHandler = () => {
-        // 窗口尺寸变化可能让整条宽链失效：清标记并整树补扫（rescanAll 而非
+        // 窗口尺寸变化可能让整条宽链失效：清标记并整树补扫（fullRescan 而非
         // reset+flush —— 后者因队列被清空不会调度扫描）
-        rescanAll();
+        if (!ensureActive()) return;
+        fullRescan();
       };
       window.addEventListener('resize', resizeHandler);
       visibilityHandler = () => {
         if (!document.hidden) flush();
       };
       document.addEventListener('visibilitychange', visibilityHandler);
+    },
+    /**
+     * 主动同步激活状态。调用方在切换开关 / 改变布局判定后调用：
+     * 由开转关撤销标记，由关转开整树补扫。避免「开关已关闭但解锁器仍在
+     * 扫描」与「开关已开启但解锁器还以为自己是关的」两种错位。
+     */
+    sync(): void {
+      if (stopped) return;
+      if (!ensureActive()) return;
+      flush();
     },
     /** 停止并还原所有改动 */
     stop(): void {

@@ -1,8 +1,13 @@
 /** 全局可调参数：改这里即可调整脚本行为，改完重新 `npm run build`。 */
 export const CONFIG: {
-  /** 时间线主列目标宽度（px） */
+  /**
+   * 时间线主列宽度上限（px）——**只在右栏显示时生效**。
+   * 右栏显示时三栏空间紧张，主列按「视口可用宽」收敛，最多放宽到该值。
+   * 右栏隐藏时主列不按此值，而是直接铺满 X 的内容区（与 /i/grok 页一致），
+   * 详见 features/timeline-width.ts 头部「右栏隐藏 = 铺满内容区」。
+   */
   timelineWidth: number;
-  /** 是否默认开启「宽时间线」（开启后主列按 timelineWidth 放宽，右栏显示时也生效） */
+  /** 是否默认开启「宽时间线」（开启后主列铺满内容区 / 右栏显示时放宽到上限） */
   timelineWide: boolean;
   /**
    * 需要解除的「写死宽度」区间（px）。
@@ -25,17 +30,16 @@ export const CONFIG: {
   sidebar: {
     /** 是否默认隐藏右侧栏（可用 Alt+B 在页面上实时切换） */
     hiddenByDefault: boolean;
-    /** 右栏隐藏后让主内容区重新居中（补偿原右栏占位的空白） */
-    recenter: boolean;
     /**
-     * 左/右栏以主列（时间线）为锚点：左栏右缘贴主列左缘、右栏左缘距主列 30px。
-     * X 把左栏 fixed 在视口左侧，主列一旦居中就会脱节，开启后左栏随主列移动。
+     * 右栏显示时把它钉在主列右侧（固定 30px 间距，左对齐而非 space-between）。
+     * 左导航条**不**由脚本摆放：X 自己的 fixed 定位已经与主列左缘对齐，
+     * 覆盖它只会让 /home 与 /i/grok 的导航条走两套机制（2026-09-08 真机复核）。
      */
-    anchor: boolean;
+    anchorSidebar: boolean;
   };
   /** 媒体高度钳制（详见 features/media-cap.ts）：宽列下超高竖图/轮播行不超出一屏 */
   media: {
-    /** 是否默认开启（可用油猴菜单实时切换） */
+    /** 是否默认开启（可在页内设置面板实时切换） */
     cap: boolean;
     /** 宿主识别宽度下限（px）：媒体祖先 ≥ 该宽才视为「整行媒体区」而非单格/单图 */
     lockWidth: number;
@@ -44,7 +48,7 @@ export const CONFIG: {
   };
   /** 搜索框迁移到左侧导航条 */
   search: {
-    /** 是否在导航条 logo 右侧显示搜索框（可在油猴菜单里开关） */
+    /** 是否在导航条 logo 右侧显示搜索框（可在页内设置面板开关） */
     enabled: boolean;
     /**
      * custom：自建输入框，回车跳转到 /search?q= —— 稳定，不触碰 X 的 React 树（默认）
@@ -54,6 +58,28 @@ export const CONFIG: {
     mode: 'custom' | 'move';
     /** 占位文案 */
     placeholder: string;
+  };
+  /** 页内设置面板（右下角设置按钮 + 弹窗，取代旧版油猴菜单开关） */
+  settings: {
+    /** 设置按钮距视口右边（px）：与 X 的 Grok / 私信悬浮按钮同列（2026-09-13 实测 20） */
+    right: number;
+    /** 设置按钮与右下角抽屉容器上缘的间距（px）；X 自己两个悬浮按钮之间也是 12 */
+    gap: number;
+    /**
+     * 页面里没有右下角抽屉容器时（如 /i/grok）退回的距底边距离（px）。
+     * 数值 = Grok 收起态按钮距底边 79 + 按钮高 55 + 间距 12（2026-09-13 实测），
+     * 让「有 Grok 按钮」与「没有」的页面位置一致，导航时不跳动。
+     */
+    fallbackBottom: number;
+    /**
+     * 设置按钮几何兜底值（2026-09-13 实测 X 自己的 Grok / 私信按钮：55×55、圆角 16、图标 32）。
+     * 页面里能读到 X 的悬浮按钮时（绝大多数页面）会直接镜像它的实时几何，见 settings-panel.ts。
+     */
+    fab: {
+      size: number;
+      radius: number;
+      iconSize: number;
+    };
   };
 } = {
   timelineWidth: 800,
@@ -67,8 +93,7 @@ export const CONFIG: {
   },
   sidebar: {
     hiddenByDefault: true,
-    recenter: true,
-    anchor: true,
+    anchorSidebar: true,
   },
   media: {
     cap: true,
@@ -79,5 +104,15 @@ export const CONFIG: {
     enabled: true,
     mode: 'custom',
     placeholder: '搜索',
+  },
+  settings: {
+    right: 20,
+    gap: 12,
+    fallbackBottom: 146,
+    fab: {
+      size: 55,
+      radius: 16,
+      iconSize: 32,
+    },
   },
 };

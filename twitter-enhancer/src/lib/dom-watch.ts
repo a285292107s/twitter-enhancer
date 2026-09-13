@@ -11,6 +11,10 @@
  *   把新增的 Element 加入共享池（供宽度解锁器增量消费）；
  * - 派发经 setTimeout 节流（后台标签页 rAF 会被冻结，故不用 rAF），
  *   visibilitychange 回前台时再补一次冲刷；
+ * - **例外（快路径）**：SPA 导航会整棵重挂 app shell，主列 / 三栏行 / 左栏换成新节点，
+ *   各功能写在这些节点上的内联样式随之丢失。若等 120ms 节流再补写，用户会看到
+ *   「主列突然左移又回弹、左栏跳位」的闪烁（实测见 structuralAnchorChanged）。
+ *   锚点节点身份变化时在 MO 回调里同步冲刷（早于渲染帧），其余变更照旧节流。
  * - 订阅方在各自回调里只处理自己的逻辑。
  *
  * 注意：主题跟随（tweet-ui）仍需监听 html/body 的 style/class 属性变化，
@@ -27,6 +31,12 @@ export interface DomWatchDetail {
   added: Element[];
   /** 新增元素数量超出共享池上限，可能丢节点（订阅方决定是否整树兜底重扫） */
   overflow: boolean;
+  /**
+   * 本批次是否含「锚点节点身份变化」：主列 / 三栏行 / 左栏 logo / 右栏被 React
+   * 整体替换（SPA 导航重挂 app shell 的典型特征）。为 true 时该批次已同步冲刷，
+   * 订阅方写在节点上的内联样式必须在本回调内重写（否则新节点会先按 X 原生布局绘制）。
+   */
+  structural: boolean;
 }
 
 export type DomWatchListener = (detail: DomWatchDetail) => void;
@@ -37,6 +47,56 @@ const ADDED_POOL_LIMIT = 3000;
 /** 采样保留条数 */
 const SAMPLE_LIMIT = 8;
 
+/**
+ * 结构性锚点：各功能把补偿样式写成「内联样式」挂在这些节点上
+ * （三栏行的 justify-content / min-width、右栏的 margin-left）。
+ * X 的 SPA 导航会整棵卸载并重挂 app shell —— 这些节点全部换成新节点，
+ * 内联样式随之丢失。
+ *
+ * LOGO_SELECTOR 只用于识别「导航条被整体重建」（搜索宿主挂载点随之重建）；
+ * 左导航条本身的位置由 X 自己 fixed 定位，脚本不写（见 sidebar.ts）。
+ */
+const PRIMARY_SELECTOR = '[data-testid="primaryColumn"]';
+const SIDEBAR_SELECTOR = '[data-testid="sidebarColumn"]';
+/** 左栏 logo：导航条（搜索宿主挂载点）随之整体重建，身份变化同样要立即补写 */
+const LOGO_SELECTOR = 'a[aria-label="X"]';
+
+let lastPrimary: Element | null = null;
+let lastSidebar: Element | null = null;
+let lastRow: Element | null = null;
+let lastLogo: Element | null = null;
+
+/**
+ * 锚点节点身份是否变化（被 React 替换 / 增删）。
+ *
+ * 为什么必须单独判定：若等 120ms 节流批次再重写样式，用户会看到明显闪烁 ——
+ * 2026-09 真机实测（1440×900，时间线点进详情推文）：新三栏行在 t+546ms 挂载时
+ * 还是 X 原生布局，t+687ms 才被改成本脚本的锚定布局；左栏搜索宿主更早随导航条
+ * 被替换（t+227ms），直到 t+669ms 才重新挂上。两处都是「先按 X 原生画一帧再回弹」。
+ *
+ * 每次只做三个 querySelector + 一次 parentElement 读取；主列在文档序里靠前，
+ * 命中即返回。滚动时（虚拟列表增删推文）这些引用都不变，不会走快路径。
+ */
+function structuralAnchorChanged(): boolean {
+  const primary = document.querySelector(PRIMARY_SELECTOR);
+  const sidebar = document.querySelector(SIDEBAR_SELECTOR);
+  const row = primary?.parentElement ?? null;
+  const logo = document.querySelector(LOGO_SELECTOR);
+  if (
+    primary === lastPrimary &&
+    sidebar === lastSidebar &&
+    row === lastRow &&
+    logo === lastLogo
+  ) {
+    return false;
+  }
+  lastPrimary = primary;
+  lastSidebar = sidebar;
+  lastRow = row;
+  lastLogo = logo;
+  return true;
+}
+
 let started = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let observer: MutationObserver | null = null;
@@ -45,6 +105,8 @@ let count = 0;
 let samples: MutationRecord[] = [];
 let addedPool: Element[] = [];
 let overflow = false;
+/** 本批次是否含「锚点节点身份变化」（由 MO 回调设置，冲刷后清零） */
+let structuralPending = false;
 const listeners = new Set<DomWatchListener>();
 
 function scheduleFlush(): void {
@@ -62,11 +124,13 @@ function flush(): void {
     samples,
     added: addedPool,
     overflow,
+    structural: structuralPending,
   };
   count = 0;
   samples = [];
   addedPool = [];
   overflow = false;
+  structuralPending = false;
   for (const listener of [...listeners]) {
     try {
       listener(detail);
@@ -97,7 +161,15 @@ export function startDomWatch(): void {
           addedPool.push(node);
         }
       }
-      scheduleFlush();
+      // 结构性替换必须抢在渲染帧之前补写样式（MO 回调在本次变更的微任务检查点执行，
+      // 早于样式计算与绘制）：同步冲刷，避免主列 / 左栏在首帧跳位后再回弹。
+      // 普通变更（滚动插入推文等）仍走 120ms 节流批次。
+      if (structuralAnchorChanged()) {
+        structuralPending = true;
+        flushDomWatch();
+      } else {
+        scheduleFlush();
+      }
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     // 回前台时若观察器因后台冻结未及时冲刷，补一次
@@ -129,7 +201,7 @@ export function flushDomWatch(): void {
 
 /**
  * 广播「主列 / 右栏 / 时间线几何可能已变化」。
- * 由宽时间线重算、右栏显隐后触发，供左栏 / 右栏锚定与媒体重算订阅。
+ * 由宽时间线重算、右栏显隐后触发，供右栏锚定与媒体重算订阅。
  * 保留 CustomEvent('te:layout') 名称，与既有页面内监听兼容。
  */
 export function dispatchLayoutEvent(): void {

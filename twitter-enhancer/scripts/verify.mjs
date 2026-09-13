@@ -4,7 +4,10 @@
  * 覆盖：
  * 1. 宽度解锁器 unlock-width：按计算值识别并解除被写死的 600px 容器；
  * 2. 推文 UI tweet-ui：主题检测、设计令牌注入、Alt+U 开关与持久化；
- * 3. 侧栏与搜索 sidebar：右栏隐藏、搜索宿主挂载、居中补偿、Alt+B 双向切换。
+ * 3. 侧栏与搜索 sidebar：右栏隐藏、搜索宿主挂载、Alt+B 双向切换；
+ * 4. 宽时间线 timeline-width：右栏隐藏时主列铺满 X 内容区（与 /i/grok 一致、左缘不动），
+ *    右栏显示时 800 封顶；X 没渲染三栏的页面（/i/grok 单栏、/i/chat 双栏）交回原生；
+ * 5. 页内设置面板 settings-panel：右下角设置按钮（Grok 按钮上方）、弹窗、开关生效。
  *
  * 运行：node scripts/verify.mjs（或 npm run verify）
  */
@@ -40,13 +43,13 @@ const expect = (name, actual, wanted) => {
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function createWindow(html = HTML) {
+function createWindow(html = HTML, url = 'https://x.com/home') {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', (e) => console.error('[jsdom]', e.message));
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     pretendToBeVisual: true,
-    url: 'https://x.com/home',
+    url,
     virtualConsole,
   });
   const { window } = dom;
@@ -68,14 +71,14 @@ function createWindow(html = HTML) {
       return h ? Number(h) : 0;
     },
   });
-  // jsdom 无布局引擎，clientWidth 恒为 0；这里让主列返回真实宽度 800，
-  // 带 data-w 的元素返回指定宽度（用于模拟内栏收窄）。
+  // jsdom 无布局引擎，clientWidth 恒为 0；这里让主列返回宽列已生效后的宽度 980
+  // （媒体钳制 / 解锁器都按它判断「主列已经放宽」），带 data-w 的元素返回指定宽度。
   Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
     configurable: true,
     get() {
       const forced = this.getAttribute?.('data-w');
       if (forced) return Number(forced);
-      return this.getAttribute('data-testid') === 'primaryColumn' ? 800 : 0;
+      return this.getAttribute('data-testid') === 'primaryColumn' ? 980 : 0;
     },
   });
   // 给 logo 与导航条编造几何信息，用于验证「搜索框定位到 logo 右侧」的计算
@@ -91,17 +94,38 @@ function createWindow(html = HTML) {
       if (this.matches?.('#logoRow')) {
         return { left: 0, right: 275, top: 0, bottom: 50, width: 275, height: 50 };
       }
-      // 主列：按「右栏隐藏且已居中」的真实几何（1920 视口实测）
+      // 主列：1440 视口实测原生几何（左缘 363，原生宽 600）；宽列生效后由 CSS 变量
+      // 决定真实宽度，这里保持原生值 —— 宽时间线「只放宽、从不收窄」的兜底判据
+      // 读的就是它。带 data-w 时（模拟 X Chat 原生 1187 / Grok 原生 980）按指定值。
       if (this.matches?.('[data-testid="primaryColumn"]')) {
-        return { left: 720, right: 1520, top: 0, bottom: 100, width: 800, height: 100 };
+        const width = Number(this.getAttribute('data-w') ?? 600);
+        return { left: 363, right: 363 + width, top: 0, bottom: 100, width, height: 100 };
       }
-      // 左栏：X 用 fixed 钉在视口左侧
-      if (this.matches?.('#rail')) {
-        return { left: 320, right: 595, top: 0, bottom: 100, width: 275, height: 100 };
+      // 右栏：1440 视口实测 350 宽（左缘 993 / 右缘 1343），右缘之外还有 70px 右边距
+      if (this.matches?.('[data-testid="sidebarColumn"]')) {
+        return { left: 993, right: 1343, top: 0, bottom: 100, width: 350, height: 100 };
+      }
+      // 右下角 Grok 抽屉容器：1280×720 实测 350×55 @ y=586（可见按钮距右边 20、距底边 79）。
+      // 设置按钮以它的上缘定位（在 Grok 按钮正上方），见 settings-panel.ts。
+      if (this.matches?.('[data-testid="GrokDrawer"]')) {
+        return { left: 910, right: 1260, top: 586, bottom: 641, width: 350, height: 55 };
+      }
+      // Grok 悬浮按钮本体（收起态就是抽屉头）：实测 55×55，右侧留 20。
+      if (this.matches?.('[data-testid="GrokDrawerHeader"]')) {
+        return { left: 1205, right: 1260, top: 586, bottom: 641, width: 55, height: 55 };
       }
       return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
     },
   });
+  // 布局桩：1440 视口实测三栏行宽 1050（= 600 主列 + 30 间距 + 350 右栏 + 70 右栏右边距）。
+  // 宽时间线「右栏隐藏时铺满内容区」的目标宽度 = 1050 − 70 = 980 由此可复现。
+  for (const primary of window.document.querySelectorAll('[data-testid="primaryColumn"]')) {
+    const row = primary.parentElement;
+    if (row && !row.hasAttribute('data-w')) row.setAttribute('data-w', '1050');
+  }
+  for (const sidebar of window.document.querySelectorAll('[data-testid="sidebarColumn"]')) {
+    sidebar.style.marginRight = '70px';
+  }
   return window;
 }
 
@@ -109,6 +133,31 @@ const press = (window, code) =>
   window.dispatchEvent(
     new window.KeyboardEvent('keydown', { code, altKey: true, bubbles: true, cancelable: true }),
   );
+
+/** 打开页内设置弹窗（已打开则原样返回） */
+const openSettings = (window) => {
+  const overlay = window.document.querySelector('.te-settings-overlay');
+  if (overlay?.getAttribute('data-te-settings-open') !== 'true') {
+    window.document.querySelector('.te-settings-fab').click();
+  }
+  return overlay;
+};
+
+/** 通过设置面板切换某个开关（驱动真实 UI，而不是直接调功能内部函数） */
+const toggleSetting = (window, id) => {
+  openSettings(window);
+  const toggle = window.document.querySelector(
+    `.te-settings-row[data-te-setting="${id}"] .te-settings-switch`,
+  );
+  toggle.click();
+  return toggle;
+};
+
+/** 读某个开关当前的 aria-checked */
+const settingState = (window, id) =>
+  window.document
+    .querySelector(`.te-settings-row[data-te-setting="${id}"] .te-settings-switch`)
+    ?.getAttribute('aria-checked');
 
 // ================= 实例一：默认状态 =================
 const w1 = createWindow();
@@ -119,10 +168,12 @@ const q = (id) => w1.document.getElementById(id);
 expect('timeline（max-width:600px）应被解锁', q('timeline').dataset.teWidthUnlocked, 'max');
 expect('tweet（width:600px）应被解锁', q('tweet').dataset.teWidthUnlocked, 'fixed');
 expect('avatar（48px）不应被误伤', q('avatar').dataset.teWidthUnlocked, undefined);
+// 右栏隐藏时主列铺满 X 内容区：行宽 1050 − 右栏保留的右边距 70 = 980
+// （1440 视口实测，与 /i/grok 的原生主列同宽同左缘）
 expect(
-  '主列宽度变量写入 800px',
+  '主列铺满内容区（980 = 行 1050 − 右栏保留的右边距 70）',
   w1.document.documentElement.style.getPropertyValue('--te-timeline-width'),
-  '800px',
+  '980px',
 );
 
 const root1 = w1.document.documentElement;
@@ -132,7 +183,10 @@ expect('正文字号令牌 16px', root1.style.getPropertyValue('--te-body-size')
 expect('行高令牌 1.5', root1.style.getPropertyValue('--te-body-lh'), '1.5');
 expect('行长令牌 72ch', root1.style.getPropertyValue('--te-measure'), '72ch');
 expect('宽时间线默认开启', root1.dataset.teTimeline, 'wide');
-expect('三栏行被撑开以容纳主列', w1.document.getElementById('row').style.minWidth, '800px');
+// 铺满内容区时主列已占满 X 给内容区的宽度，行不需要任何补偿样式：
+// 保持 X 原生的 space-between（单子节点下等价于左对齐），与 /i/grok 的行一致
+expect('铺满内容区时不撑开三栏行', w1.document.getElementById('row').style.minWidth, '');
+expect('铺满内容区时不给行打补偿标记', w1.document.getElementById('row').dataset.teRow, undefined);
 expect('导航条搜索框默认开启', root1.dataset.teSearch, 'on');
 
 expect('右侧栏默认隐藏', root1.dataset.teSidebar, 'off');
@@ -146,7 +200,9 @@ expect(
   host1?.querySelector('input[type="search"]')?.getAttribute('aria-label'),
   '搜索',
 );
-expect('三栏行已居中', q('row').style.justifyContent, 'center');
+// 右栏隐藏时不再做居中补偿（居中会把主列左缘推开、左导航条跟着偏移）；
+// 主列铺满内容区，行交回 X 原生对齐
+expect('右栏隐藏时不改写行对齐', q('row').style.justifyContent, '');
 expect('logo 与导航项同级时退回绝对定位', host1?.dataset.teSearchLayout, 'absolute');
 expect('导航条被设为定位上下文', nav1.style.position, 'relative');
 expect('搜索框左边缘在 logo 右侧（62+12）', host1?.style.left, '74px');
@@ -186,18 +242,18 @@ await sleep(120);
 const root3 = w3.document.documentElement;
 const row3 = w3.document.getElementById('row');
 expect('按存储恢复为显示右栏', root3.dataset.teSidebar, 'on');
-// 右栏显示时改为「左对齐 + 右栏固定 30px 间距」的锚定布局，不再是居中补偿
-expect('显示右栏时不做居中补偿', row3.style.justifyContent, 'flex-start');
+// 右栏显示时改为「左对齐 + 右栏固定 30px 间距」的锚定布局，而不是把行交给 X 原生
+expect('显示右栏时行改为左对齐锚定', row3.style.justifyContent, 'flex-start');
 
 press(w3, 'KeyB');
 await sleep(60);
 expect('Alt+B 隐藏右栏', root3.dataset.teSidebar, 'off');
-expect('隐藏后加居中补偿', row3.style.justifyContent, 'center');
+expect('隐藏后还原 X 原生行对齐（不做居中补偿）', row3.style.justifyContent, '');
 
 press(w3, 'KeyB');
 await sleep(60);
 expect('再次 Alt+B 恢复右栏', root3.dataset.teSidebar, 'on');
-expect('恢复后撤销居中补偿', row3.style.justifyContent, 'flex-start');
+expect('恢复后重新锚定为左对齐', row3.style.justifyContent, 'flex-start');
 
 // ================= 实例四：/ 快捷键拦截 =================
 const w4 = createWindow();
@@ -219,65 +275,151 @@ w4.dispatchEvent(
 await sleep(30);
 expect('输入框内按 / 不被重复处理', w4.document.activeElement === input4, true);
 
-// ================= 实例五：油猴菜单开关（mock GM API） =================
-const w5 = createWindow();
-const menu = new Map();
-let nextId = 1;
+// ================= 实例五：页内设置面板（取代旧版油猴菜单开关） =================
+// 开关从油猴菜单搬进页面：右下角设置按钮（在 X 的 Grok 悬浮按钮正上方）→ 设置弹窗。
+// 面板按钮位置来自 X 右下角抽屉容器的实测几何（见 createWindow 的 getBoundingClientRect 桩）。
+const HTML_SETTINGS = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a><a href="/explore">探索</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%"><div id="timeline" style="max-width:600px"><div id="tweet" style="width:600px">tweet</div></div></div>
+    </div>
+    <div data-testid="sidebarColumn"><form role="search"><input data-testid="SearchBox_Search_Input" /></form></div>
+  </div>
+  <div data-testid="GrokDrawer"><button data-testid="GrokDrawerHeader" aria-label="Grok">Grok</button></div>
+</body></html>`;
+
+const w5 = createWindow(HTML_SETTINGS);
+// 旧版把开关挂进油猴菜单；现在必须完全不注册菜单项（mock 仍然挂上，用来证明没有调用）
+const menu5 = new Map();
+let menuId5 = 1;
 w5.GM_registerMenuCommand = (label, fn) => {
-  const id = nextId++;
-  menu.set(id, { label, fn });
+  const id = menuId5++;
+  menu5.set(id, { label, fn });
   return id;
 };
-w5.GM_unregisterMenuCommand = (id) => {
-  menu.delete(id);
-};
+w5.GM_unregisterMenuCommand = (id) => menu5.delete(id);
 w5.eval(script);
 await sleep(120);
 
-const labels = () => [...menu.values()].map((item) => item.label);
-expect('注册了五个菜单开关', menu.size, 5);
-expect('菜单含推文新样式开关', labels().some((l) => l.includes('推文新样式：开')), true);
-expect('菜单含右侧栏开关', labels().some((l) => l.includes('右侧栏：隐藏')), true);
-expect('菜单含宽时间线开关', labels().some((l) => l.includes('宽时间线（800px）：开')), true);
-expect('菜单含导航条搜索框开关', labels().some((l) => l.includes('导航条搜索框：开')), true);
-expect('菜单含媒体高度钳制开关', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：开')), true);
+expect('不再注册油猴菜单开关', menu5.size, 0);
+const fab5 = w5.document.querySelector('.te-settings-fab');
+expect('右下角出现设置按钮', Boolean(fab5), true);
+expect('设置按钮有可访问名称', fab5?.getAttribute('aria-label'), '页面优化设置');
+// 位置锚定在 Grok 抽屉容器上缘之上：jsdom 视口高 768，抽屉上缘 586，间距 12 → 768−586+12
+expect('设置按钮距右边与 Grok 按钮同列（20px）', fab5?.style.right, '20px');
+expect('设置按钮落在 Grok 按钮上方（抽屉上缘 − 12px）', fab5?.style.bottom, '194px');
+// 尺寸必须与 X 的悬浮按钮一致（55×55 / 圆角 16 / 图标 32）：页面里读到 X 按钮时镜像它的
+// 实时几何，读不到时用 CONFIG.settings.fab 兜底 —— 两条路径下都不该出现 48px 这类旧值。
+expect('设置按钮与 Grok 按钮同尺寸（55×55）', `${fab5?.style.width}x${fab5?.style.height}`, '55pxx55px');
+expect('设置按钮圆角与 Grok 按钮一致（16px）', fab5?.style.borderRadius, '16px');
+expect('设置按钮内的图标为 32px（与 X 按钮图标同大）', fab5?.style.getPropertyValue('--te-set-fab-icon'), '32px');
 
-const sidebarItem = [...menu.values()].find((item) => item.label.includes('右侧栏'));
-sidebarItem.fn();
+const overlay5 = w5.document.querySelector('.te-settings-overlay');
+expect('弹窗默认关闭', overlay5?.getAttribute('data-te-settings-open'), 'false');
+
+fab5.click();
 await sleep(30);
-expect('点击菜单后右栏变为显示', w5.document.documentElement.dataset.teSidebar, 'on');
-expect('菜单文案随状态刷新', labels().some((l) => l.includes('右侧栏：显示')), true);
-expect('刷新后菜单项数量不变', menu.size, 5);
-// 宽时间线开关：关闭后主列交回 X 原生，行不再被撑开
-const wideItem = [...menu.values()].find((item) => item.label.includes('宽时间线'));
-wideItem.fn();
+expect('点击设置按钮打开弹窗', overlay5?.getAttribute('data-te-settings-open'), 'true');
+expect('打开后按钮标记为展开', fab5.getAttribute('aria-expanded'), 'true');
+const dialog5 = overlay5.querySelector('.te-settings-dialog');
+expect('弹窗带对话框语义', dialog5?.getAttribute('role'), 'dialog');
+expect('弹窗标题为「设置」', w5.document.getElementById('te-settings-title')?.textContent, '设置');
+
+const rows5 = [...w5.document.querySelectorAll('.te-settings-row')];
+expect('四个功能共登记五个开关', rows5.length, 5);
+expect(
+  '开关顺序为 布局三项 + 内容两项',
+  rows5.map((row) => row.dataset.teSetting).join(','),
+  'timeline-wide,sidebar,nav-search,tweet-ui,media-cap',
+);
+expect(
+  '同组开关合并到一个小标题下',
+  [...w5.document.querySelectorAll('.te-settings-group-title')].map((t) => t.textContent).join(','),
+  '布局,内容',
+);
+expect('宽时间线开关初始为开', settingState(w5, 'timeline-wide'), 'true');
+expect('显示右侧栏开关初始为关（右栏默认隐藏）', settingState(w5, 'sidebar'), 'false');
+expect('开关的可访问角色为 switch', rows5[0].querySelector('.te-settings-switch')?.getAttribute('role'), 'switch');
+
+// 点击开关 → 功能生效 + 面板状态刷新
+toggleSetting(w5, 'sidebar');
+await sleep(30);
+expect('点击「显示右侧栏」后右栏显示', w5.document.documentElement.dataset.teSidebar, 'on');
+expect('开关状态刷新为开', settingState(w5, 'sidebar'), 'true');
+expect('开关行状态标记同步', w5.document.querySelector('[data-te-setting="sidebar"]').dataset.teSettingState, 'on');
+
+// 宽时间线开关：关闭后主列交回 X 原生，写入的宽度变量不再被 CSS 采用、行样式清空
+toggleSetting(w5, 'timeline-wide');
 await sleep(30);
 expect('关闭宽时间线后属性转为 off', w5.document.documentElement.dataset.teTimeline, 'off');
-expect('关闭宽时间线后撤销行的 min-width', w5.document.getElementById('row').style.minWidth, '');
-expect('宽时间线菜单文案刷新', labels().some((l) => l.includes('宽时间线（800px）：关')), true);
-wideItem.fn();
+expect('关闭宽时间线后行样式被清空', w5.document.getElementById('row').style.minWidth, '');
+expect('宽时间线开关状态刷新为关', settingState(w5, 'timeline-wide'), 'false');
+toggleSetting(w5, 'timeline-wide');
 await sleep(30);
 expect('再次点击恢复宽时间线', w5.document.documentElement.dataset.teTimeline, 'wide');
-
-// 媒体高度钳制开关（宽列下超高媒体 contain 缩到一屏内，关闭后全部还原）
-const capItem = [...menu.values()].find((item) => item.label.includes('媒体高度钳制'));
-capItem.fn();
-await sleep(30);
-expect('关闭媒体钳制菜单文案刷新', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：关')), true);
-capItem.fn();
-await sleep(30);
-expect('再次点击恢复媒体钳制', labels().some((l) => l.includes('媒体高度钳制（超高媒体 ≤540px 一屏看全）：开')), true);
+expect('宽时间线开关状态刷新为开', settingState(w5, 'timeline-wide'), 'true');
 
 // 导航条搜索框开关
-const searchItem = [...menu.values()].find((item) => item.label.includes('导航条搜索框'));
-searchItem.fn();
+toggleSetting(w5, 'nav-search');
 await sleep(30);
 expect('关闭导航条搜索框', w5.document.documentElement.dataset.teSearch, 'off');
 expect('关闭后宿主仍在 DOM（可随时再开）', Boolean(w5.document.querySelector('.te-search-host')), true);
-expect('搜索框菜单文案刷新', labels().some((l) => l.includes('导航条搜索框：关')), true);
-searchItem.fn();
+toggleSetting(w5, 'nav-search');
 await sleep(30);
 expect('再次点击恢复搜索框', w5.document.documentElement.dataset.teSearch, 'on');
+
+// 页面快捷键改状态时，打开着的面板要跟着刷新（Alt+U 关推文新样式）
+press(w5, 'KeyU');
+await sleep(30);
+expect('Alt+U 关闭推文新样式', w5.document.documentElement.dataset.teUi, 'off');
+expect('面板中推文新样式开关同步为关', settingState(w5, 'tweet-ui'), 'false');
+press(w5, 'KeyU');
+await sleep(30);
+expect('Alt+U 再次开启', w5.document.documentElement.dataset.teUi, 'on');
+
+// 关闭路径：Esc、遮罩、右上角关闭按钮
+const escape5 = new w5.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+w5.dispatchEvent(escape5);
+await sleep(30);
+expect('Esc 关闭弹窗', overlay5.getAttribute('data-te-settings-open'), 'false');
+expect('Esc 关闭后按钮标记复位', fab5.getAttribute('aria-expanded'), 'false');
+expect('Esc 已阻止默认行为（不惊动 X 自己的浮层）', escape5.defaultPrevented, true);
+
+openSettings(w5);
+await sleep(30);
+overlay5.dispatchEvent(new w5.MouseEvent('click', { bubbles: true }));
+await sleep(30);
+expect('点击遮罩关闭弹窗', overlay5.getAttribute('data-te-settings-open'), 'false');
+
+openSettings(w5);
+await sleep(30);
+w5.document.querySelector('.te-settings-close').click();
+await sleep(30);
+expect('点击关闭按钮关闭弹窗', overlay5.getAttribute('data-te-settings-open'), 'false');
+
+// 页面里没有 Grok / 私信抽屉时（如 /i/grok）退回配置里的固定偏移，位置不跳动
+const HTML_NO_DRAWER = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="rowNoDrawer" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px"></div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+const w5b = createWindow(HTML_NO_DRAWER);
+w5b.eval(script);
+await sleep(120);
+expect(
+  '无抽屉容器的页面用固定偏移（79+55+12=146）',
+  w5b.document.querySelector('.te-settings-fab')?.style.bottom,
+  '146px',
+);
+const fab5b = w5b.document.querySelector('.te-settings-fab');
+expect(
+  '无 X 悬浮按钮可镜像时仍用兜底尺寸 55×55',
+  `${fab5b?.style.width}x${fab5b?.style.height}`,
+  '55pxx55px',
+);
 
 // ================= 实例六：真实 DOM 结构（logo 是 nav 的兄弟） =================
 // 结构取自 2026-09 实测：内栏 flex column → [logo 行, nav 容器, 发帖按钮]，
@@ -349,7 +491,7 @@ const host8 = w8.document.querySelector('.te-search-host');
 expect('logo 与导航项同级时退回绝对定位', host8?.dataset.teSearchLayout, 'absolute');
 expect('绝对定位时宿主挂回导航条', host8?.parentElement === nav8, true);
 
-// ================= 实例九：左栏以主列为锚点（右栏隐藏） =================
+// ================= 实例九：右栏隐藏时脚本不碰左导航条 =================
 const HTML_RAIL = `<!doctype html><html><head></head><body>
   <div id="rail" style="position:fixed;left:320px;right:1310px">
     <div id="logoRow"><h1><a href="/home" aria-label="X">logo</a></h1></div>
@@ -367,13 +509,15 @@ await sleep(120);
 const rail9 = w9.document.getElementById('rail');
 const row9 = w9.document.getElementById('row');
 const sb9 = w9.document.querySelector('[data-testid="sidebarColumn"]');
-expect('左栏按 fixed 定位特征被识别', rail9.style.width, '275px');
-expect('左栏 right 放开（否则宽度会被 left/right 反推）', rail9.style.right, 'auto');
-expect('左栏锚到主列左侧（720-275）', rail9.style.left, '445px');
+// 左导航条由 X 自己 fixed 定位（实测与主列左缘对齐），脚本不写一个字节 ——
+// 旧版在这里钉 width/right/left，导致 /home 的导航条由脚本摆、/i/grok 由 X 摆
+expect('左栏原生 left 未被改写', rail9.style.left, '320px');
+expect('左栏原生 right 未被放开', rail9.style.right, '1310px');
+expect('左栏宽度未被钉死', rail9.style.width, '');
 expect('右栏隐藏时不动右栏外边距', sb9.style.marginLeft, '');
-expect('右栏隐藏时主列仍然居中', row9.style.justifyContent, 'center');
+expect('右栏隐藏时不改写行对齐（交回 X 原生）', row9.style.justifyContent, '');
 
-// ================= 实例十：右栏显示时也锚在主列右侧 =================
+// ================= 实例十：右栏显示时把它锚在主列右侧 =================
 const w10 = createWindow(HTML_RAIL);
 // false = 不隐藏右栏（即显示）
 w10.localStorage.setItem('twitter-enhancer:sidebar', 'false');
@@ -382,7 +526,7 @@ await sleep(120);
 const rail10 = w10.document.getElementById('rail');
 const row10 = w10.document.getElementById('row');
 const sb10 = w10.document.querySelector('[data-testid="sidebarColumn"]');
-expect('右栏显示时左栏同样锚在主列左侧', rail10.style.left, '445px');
+expect('右栏显示时依然不碰左导航条', rail10.style.left, '320px');
 expect('右栏显示时三栏行改为左对齐', row10.style.justifyContent, 'flex-start');
 expect('右栏紧贴主列右侧（固定 30px）', sb10.style.marginLeft, '30px');
 
@@ -412,21 +556,27 @@ await sleep(200); // 等 dom-watch 合并 + rAF 时间片
 expect('滚动新增的 600px 容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
 expect('既有解锁标记未被打乱', w18.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
 
-// ================= 实例十一：SPA 导航后布局自动重算 =================
+// ================= 实例十一：SPA 导航后布局自动重算（渲染帧前） =================
 // X 是 React SPA，站内导航不触发 load；脚本通过 hook history.pushState 广播 te:route。
-// 模拟 React 在导航时替换三栏行容器（锚点 / min-width 随旧节点丢失），
-// 断言路由切换后新行被重新撑开、右栏锚点被重新写入。
+// 模拟 React 在导航时替换三栏行容器（锚点 / min-width 随旧节点丢失）。
+// 关键：这里**不等待 120ms 节流批次**，只等一个宏任务让 MutationObserver 微任务回调跑完。
+// 真机实测（2026-09，时间线点进详情推文）：若等节流批次，新行会先以 X 原生布局绘制
+// （主列位置跳一下），~120ms 后才被改回来，肉眼可见闪烁。
+// dom-watch 因此在锚点节点身份变化时同步冲刷（MO 回调早于渲染帧），这里断言的就是它。
 const HTML_RAIL2 = HTML_RAIL.replace(
   '<div id="row" style="display:flex">',
   '<div id="row2" style="display:flex">',
 );
 const w11 = createWindow(HTML_RAIL2);
-// false = 显示右栏（锚定路径覆盖更全：min-width 撑开 + margin-left 锚定同时生效）
+// false = 显示右栏（锚定路径覆盖更全：min-width 撑开 + margin-left 锚定同时生效）。
+// 行 min-width = 主列目标宽 + 右栏占用；jsdom 无布局引擎，右栏的 getClientRects 为空、
+// 占位按 0 计，所以这里等于「可用空间内 800 封顶」的目标宽本身（真机几何见 e2e:real）
+const SIDEBAR_SHOWN_MIN_WIDTH = '800px';
 w11.localStorage.setItem('twitter-enhancer:sidebar', 'false');
 w11.eval(script);
 await sleep(120);
 const row11a = w11.document.getElementById('row2');
-expect('初始状态行被撑开', row11a.style.minWidth, '800px');
+expect('初始状态行被撑开', row11a.style.minWidth, SIDEBAR_SHOWN_MIN_WIDTH);
 expect('初始状态右栏已锚定', w11.document.querySelector('[data-testid="sidebarColumn"]').style.marginLeft, '30px');
 
 // 模拟 SPA 导航：React 替换三栏行容器并把右栏移入新行，旧样式随旧节点消失
@@ -441,15 +591,54 @@ const sidebar11 = w11.document.querySelector('[data-testid="sidebarColumn"]');
 sidebar11.style.marginLeft = '';
 row11b.appendChild(sidebar11);
 w11.document.getElementById('row2').replaceWith(row11b);
-// 主列选择器按 data-testid 命中新容器；history.pushState 触发路由广播
-w11.history.pushState({}, '', '/explore');
-await sleep(120);
+await sleep(0); // 只让 MutationObserver 微任务回调执行，不进入 120ms 节流批次
 const row11b2 = w11.document.getElementById('row2-new');
-expect('SPA 导航后新行被重新撑开', row11b2.style.minWidth, '800px');
 expect(
-  'SPA 导航后右栏锚点重新写入',
+  '重挂行后同一任务内即重新撑开（不等 120ms 节流）',
+  row11b2.style.minWidth,
+  SIDEBAR_SHOWN_MIN_WIDTH,
+);
+expect(
+  '重挂行后同一任务内右栏锚点即重新写入',
   w11.document.querySelector('[data-testid="sidebarColumn"]').style.marginLeft,
   '30px',
+);
+expect('重挂行后左导航条依然不被改写', w11.document.getElementById('rail').style.left, '320px');
+// 路由广播（pushState）后仍应保持正确，且不产生重复 / 错乱
+w11.history.pushState({}, '', '/explore');
+await sleep(120);
+expect('路由广播后行仍被撑开', row11b2.style.minWidth, SIDEBAR_SHOWN_MIN_WIDTH);
+expect(
+  '路由广播后右栏锚点保持',
+  w11.document.querySelector('[data-testid="sidebarColumn"]').style.marginLeft,
+  '30px',
+);
+
+// ================= 实例二十二：主列被 React 替换后宽度解锁器重新绑定 =================
+// 旧版 bug：解锁器缓存的主列容器被 React 整体换掉后，旧容器已脱离文档，
+// 新增节点都不在旧容器内 → 增量分支全部跳过，解锁静默失效到下一次 resize。
+// 修正后应重新锁定新主列并整树补扫（新主列里写死 600px 的容器要被解锁）。
+const w19 = createWindow();
+w19.eval(script);
+await sleep(150);
+const oldPrimary19 = w19.document.querySelector('[data-testid="primaryColumn"]');
+const newPrimary19 = w19.document.createElement('div');
+newPrimary19.setAttribute('data-testid', 'primaryColumn');
+newPrimary19.style.width = '800px';
+const newWrap19 = w19.document.createElement('div');
+newWrap19.style.width = '100%';
+const newLocked19 = w19.document.createElement('div');
+newLocked19.id = 'newLocked';
+newLocked19.style.width = '600px';
+newLocked19.textContent = 'new tweet';
+newWrap19.appendChild(newLocked19);
+newPrimary19.appendChild(newWrap19);
+oldPrimary19.replaceWith(newPrimary19);
+await sleep(400); // dom-watch 微任务快路径 + rAF 时间片扫描
+expect(
+  '主列被替换后新主列内的锁宽容器被解锁',
+  newLocked19.dataset.teWidthUnlocked,
+  'fixed',
 );
 
 // ================= 实例十二：宽列媒体高度钳制 =================
@@ -488,6 +677,18 @@ expect('只改高度、不加 transform（避免双重缩放）', regionM.style.
 expect('纯包裹层一并压到预算', wrapM.style.height, '540px');
 expect('包裹层也打上钳制标记', wrapM.dataset.teMediaCapped, '1');
 expect('百分比 padding 比例盒的 padding 归零', wrapM.style.paddingBottom, '0px');
+
+// 设置面板里的「媒体高度钳制」开关：关掉后已钳制的媒体立即还原，再开立即恢复
+toggleSetting(wMedia, 'media-cap');
+await sleep(30);
+expect('面板关闭媒体钳制后宿主解锁', regionM.dataset.teMediaCapped, undefined);
+expect('面板关闭媒体钳制后清除 height', regionM.style.height, '');
+expect('面板关闭媒体钳制后还原包裹层原始 padding', wrapM.style.paddingBottom, 'calc(100% - 4px)');
+expect('媒体钳制开关状态刷新为关', settingState(wMedia, 'media-cap'), 'false');
+toggleSetting(wMedia, 'media-cap');
+await sleep(30);
+expect('面板重新开启后媒体再次被钳制', regionM.dataset.teMediaCapped, '1');
+expect('媒体钳制开关状态刷新为开', settingState(wMedia, 'media-cap'), 'true');
 
 // 媒体尺寸回落到预算内（如主列宽回落 / 媒体变小）→ te:layout 对账自动解锁
 regionM.setAttribute('data-w', '300');
@@ -585,6 +786,174 @@ expect('宿主 A 图片回落预算内后解锁', wrapA.dataset.teMediaCapped, u
 expect('宿主 A 解锁后清除 height', wrapA.style.height, '');
 expect('宿主 B 不受 A 的加载影响仍保持钳制', wrapB.dataset.teMediaCapped, '1');
 expect('宿主 B 高度仍为预算（540）', wrapB.style.height, '540px');
+
+// ================= 实例二十三：X 没渲染三栏的页面交回原生 =================
+// 实测（2026-09-08，1440 视口，headless 独立 profile）：
+// - /home：primaryColumn 原生 600px，右侧有 sidebarColumn（在同一个三栏行里）；
+// - /i/grok：X 自己的「单栏版」内容区 —— primaryColumn 原生 980px、
+//   max-width none、**行里没有 sidebarColumn**；
+// - /messages → 重定向到 /i/chat/*：X Chat 独立双栏，primaryColumn 原生
+//   1187px、max-width none、同样没有 sidebarColumn。
+// 宽时间线的判据因此取结构：主列所在的行里有没有 X 自己渲染的右栏。
+// 若不加判定，宽列会把 1187px 的聊天分栏挤到目标宽，Grok 页也会被当成时间线
+// （并套上「放开内层 600 上限」的一组规则）。
+const HTML_CHAT = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a><a href="/explore">探索</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" data-w="1187" style="width:1187px">
+      <div id="chatPane" style="width:100%">
+        <div id="chatLocked" style="width:600px">会话</div>
+      </div>
+    </div>
+  </div>
+</body></html>`;
+
+const wChat = createWindow(HTML_CHAT, 'https://x.com/i/chat/pin/new');
+wChat.eval(script);
+await sleep(220);
+expect('X Chat 路由下不启用宽主列', wChat.document.documentElement.dataset.teTimeline, 'off');
+expect('X Chat 路由下不写宽度变量', wChat.document.documentElement.dataset.teTimelineWidth, undefined);
+expect('X Chat 路由下不撑开三栏行', wChat.document.getElementById('row').style.minWidth, '');
+expect(
+  'X Chat 下解锁器停摆（原生 1187 双栏不被改写）',
+  wChat.document.getElementById('chatLocked').dataset.teWidthUnlocked,
+  undefined,
+);
+
+// /i/grok：单栏 + 原生 980px（= /home 的内容区宽）。X 自己就是全宽布局，
+// 本功能必须完全不碰 —— 否则会把 Grok 钉成比原生更窄的宽度。
+const HTML_GROK = HTML_CHAT.replace('data-w="1187" style="width:1187px"', 'data-w="980" style="width:980px"');
+const wGrok = createWindow(HTML_GROK, 'https://x.com/i/grok');
+wGrok.eval(script);
+await sleep(220);
+expect('Grok 页（行里没有右栏）不启用宽主列', wGrok.document.documentElement.dataset.teTimeline, 'off');
+expect('Grok 页不写宽度变量', wGrok.document.documentElement.dataset.teTimelineWidth, undefined);
+expect('Grok 页解锁器停摆（原生 980 单栏不被改写）', wGrok.document.getElementById('chatLocked').dataset.teWidthUnlocked, undefined);
+
+// 兜底判据：行里有右栏、但主列原生已宽于目标宽度的页面（X 后续新增的非时间线页面）
+// ——本功能只放宽、从不收窄，因此同样不碰
+const HTML_WIDE_COLUMN = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a><a href="/explore">探索</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" data-w="1400" style="width:1400px"></div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+const wWide = createWindow(HTML_WIDE_COLUMN);
+wWide.eval(script);
+await sleep(220);
+expect('三栏页但主列原生已宽于目标时不收窄', wWide.document.documentElement.dataset.teTimeline, 'off');
+expect('主列原生已宽于目标时不写宽度变量', wWide.document.documentElement.dataset.teTimelineWidth, undefined);
+
+// 对照：时间线页原生 600px（< 目标）应正常铺满内容区，证明判定不会误伤正常页面
+const wTimeline = createWindow();
+wTimeline.eval(script);
+await sleep(220);
+expect('时间线页原生 600px 仍正常放宽', wTimeline.document.documentElement.dataset.teTimeline, 'wide');
+expect('时间线页宽度变量为 980px', wTimeline.document.documentElement.style.getPropertyValue('--te-timeline-width'), '980px');
+
+// ================= 实例二十四：宽列关闭时解锁器停摆 / 重开时整树补扫 =================
+// 缺陷背景：解锁器只负责打 data-te-width-unlocked 标记，真正放开宽度的 CSS 挂在
+// html[data-te-timeline='wide'] 下 —— 开关关闭后继续扫描既无视觉效果，又白耗全树
+// 遍历；同时关闭期间新增的锁宽元素从未被检视，重开时必须整树补扫（增量路径补不
+// 回来：队列在关闭时已被清空）。
+const wGate = createWindow();
+wGate.eval(script);
+await sleep(200);
+expect('门控前置：宽列开启时既有元素已解锁', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
+// 开关从设置面板里点（驱动真实 UI）
+toggleSetting(wGate, 'timeline-wide');
+await sleep(60);
+expect('关闭宽列后既有解锁标记被撤销', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+
+const tlGate = wGate.document.getElementById('timeline');
+const lateGate = wGate.document.createElement('div');
+lateGate.id = 'lateGate';
+lateGate.style.width = '600px';
+lateGate.textContent = 'late tweet while off';
+tlGate.appendChild(lateGate);
+await sleep(320);
+expect('关闭宽列后新增锁宽元素不被打标记', lateGate.dataset.teWidthUnlocked, undefined);
+expect('关闭宽列后既有元素仍无标记', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+
+toggleSetting(wGate, 'timeline-wide');
+await sleep(420);
+expect('重新开启宽列后新增元素被整树补扫解锁', lateGate.dataset.teWidthUnlocked, 'fixed');
+expect('重新开启宽列后既有元素恢复标记', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
+// ================= 实例二十五：SPA 导航到 X Chat 后立即撤销宽列 =================
+// 覆盖「路由判定必须早于主列挂载」这条时序：从 /home 导航到 /i/chat 时聊天主列
+// 会晚于路由就绪，若拖到 DOM 批次里发现「主列换了」再撤销，中间可能有一帧用
+// 宽列样式绘制 1187px 的聊天列（1187 → 目标宽 → 1187 的抖动）。
+const wNav = createWindow();
+wNav.eval(script);
+await sleep(200);
+expect('导航前宽列已开启', wNav.document.documentElement.dataset.teTimeline, 'wide');
+expect('导航前主列已铺满内容区（980）', wNav.document.documentElement.dataset.teTimelineWidth, '980');
+
+wNav.history.pushState({}, '', '/i/chat');
+await sleep(160);
+expect('SPA 导航到 X Chat 后撤销宽列', wNav.document.documentElement.dataset.teTimeline, 'off');
+expect('SPA 导航到 X Chat 后清掉行的 min-width', wNav.document.getElementById('row').style.minWidth, '');
+expect('SPA 导航到 X Chat 后解锁标记被撤销', wNav.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+
+wNav.history.pushState({}, '', '/home');
+await sleep(160);
+expect('导航回时间线后恢复宽列', wNav.document.documentElement.dataset.teTimeline, 'wide');
+expect('导航回时间线后主列重新铺满内容区', wNav.document.documentElement.dataset.teTimelineWidth, '980');
+expect('导航回时间线后重新解锁', wNav.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+
+// ================= 实例二十六：SPA 导航 /home → /i/grok 不把 Grok 钉窄 =================
+// 真机逐帧实测（2026-09-08，1440 视口）：从 /home 点左栏 Grok 进入时，新主列会先以
+// 非原生宽度挂载，旧版按「主列当前宽度是否已宽于目标」判断，会在这个瞬间误判成
+// 「可以放宽」，把 Grok 页的主列钉成 800px（比 X 自己的 980 窄），直接刷新才是 980。
+// 结构判据（行里有没有右栏）不依赖时序，这里覆盖这条回归。
+const wGrokNav = createWindow(HTML_RAIL2);
+wGrokNav.eval(script);
+await sleep(200);
+expect('导航前（/home）宽列已开启', wGrokNav.document.documentElement.dataset.teTimeline, 'wide');
+
+// 模拟 React 切到 Grok：整行重挂，新行里只有主列（没有右栏），主列原生 980
+const grokRow = wGrokNav.document.createElement('div');
+grokRow.id = 'row-grok';
+grokRow.style.display = 'flex';
+const grokPrimary = wGrokNav.document.createElement('div');
+grokPrimary.setAttribute('data-testid', 'primaryColumn');
+grokPrimary.setAttribute('data-w', '980');
+grokPrimary.style.width = '980px';
+grokRow.appendChild(grokPrimary);
+wGrokNav.document.getElementById('row2').replaceWith(grokRow);
+wGrokNav.history.pushState({}, '', '/i/grok');
+await sleep(120);
+expect('导航到 Grok 后撤销宽列', wGrokNav.document.documentElement.dataset.teTimeline, 'off');
+// Grok 是 X 自己的单栏布局，解锁器必须停摆：新增的写死 600px 容器不该被打标记
+// （否则 Grok UI 里宽度落在 560–660 的面板会被放开到 100%）
+const grokLocked = wGrokNav.document.createElement('div');
+grokLocked.id = 'grokLocked';
+grokLocked.style.width = '600px';
+grokPrimary.appendChild(grokLocked);
+await sleep(240);
+expect('Grok 页解锁器停摆（新增锁宽容器不被打标记）', grokLocked.dataset.teWidthUnlocked, undefined);
+
+// 导航回 /home（React 重挂带右栏的三栏行）→ 宽列恢复
+const homeRow = wGrokNav.document.createElement('div');
+homeRow.id = 'row-home';
+homeRow.style.display = 'flex';
+homeRow.setAttribute('data-w', '1050');
+const homePrimary = wGrokNav.document.createElement('div');
+homePrimary.setAttribute('data-testid', 'primaryColumn');
+homePrimary.style.width = '600px';
+homeRow.appendChild(homePrimary);
+const homeSidebar = wGrokNav.document.createElement('div');
+homeSidebar.setAttribute('data-testid', 'sidebarColumn');
+homeSidebar.style.marginRight = '70px';
+homeRow.appendChild(homeSidebar);
+grokRow.replaceWith(homeRow);
+wGrokNav.history.pushState({}, '', '/home');
+await sleep(160);
+expect('导航回 /home 后恢复宽列', wGrokNav.document.documentElement.dataset.teTimeline, 'wide');
+expect('导航回 /home 后主列重新铺满内容区（980）', wGrokNav.document.documentElement.dataset.teTimelineWidth, '980');
 
 // ================= 输出 =================
 let failed = 0;

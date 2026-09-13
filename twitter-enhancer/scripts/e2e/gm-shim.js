@@ -7,8 +7,8 @@
 // - store.ts 的 GM_getValue / GM_setValue：编译成 (() => typeof GM_getValue != "undefined"
 //   ? GM_getValue : void 0)()，未定义时 store.gmAvailable() 为 false，
 //   自动落到仓库自带的 localStorage 双写路径 —— 保持未定义即可，行为与 jsdom 回归一致；
-// - menu.ts 的 GM_registerMenuCommand / GM_unregisterMenuCommand：同样有 typeof 守卫，
-//   未定义时 registerToggleMenu 直接 no-op —— 菜单项不进入页面，符合预期（本通道不覆盖菜单 UI）。
+// - 开关不再走油猴菜单（GM_registerMenuCommand 已从 grant 中移除），页内设置面板是普通 DOM，
+//   本通道与 jsdom 回归都能正常覆盖它。
 //
 // 时序硬化：Playwright addInitScript 在 document 刚创建时执行，document.documentElement /
 // document.head 可能尚未生成（真 TM 的 document-start 同理）。style 无处可挂时先排队，

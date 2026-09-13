@@ -7,6 +7,8 @@
  *    只有 logo 没有独立行容器时才退回绝对定位（见 mountBesideLogo）。
  * 3. X 的 SPA 重渲染可能移除宿主或被测量元素变化，因此用 MutationObserver + ResizeObserver 守护。
  * 4. 自建输入框（custom）为默认；move 模式搬运原生搜索框属高风险选项，见 config 说明。
+ * 5. 左导航条（rail）不写任何样式 —— X 自己的 fixed 定位已经正确（与主列左缘对齐），
+ *    由脚本覆盖反而会让 /home 与 /i/grok 的导航条走两套机制，见 applySidebarGap 上方说明。
  *
  * 真实 DOM（2026-09 实测，class 为哈希值，只能按结构定位）：
  *   div.r-1habvwh（内栏，flex column，已 position:relative）
@@ -17,17 +19,14 @@
  *   会误命中 nav a[href="/home"]（"主页"项，宽 259），算出错误坐标使搜索框退化成单图标。
  */
 import { CONFIG } from '../config';
-import { registerToggleMenu } from '../lib/menu';
+import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
 import './sidebar.css';
 
 const SIDEBAR = '[data-testid="sidebarColumn"]';
-const PRIMARY = '[data-testid="primaryColumn"]';
 const SEARCH_INPUT = '[data-testid="SearchBox_Search_Input"]';
-/** 左栏右缘与主列左缘的间距：X 原生为 0（左栏正好接到主列） */
-const RAIL_GAP = 0;
 /** 右栏左缘与主列右缘的间距：沿用 X 原生的 30px */
 const SIDEBAR_GAP = 30;
 /** 左侧导航条：不同版本结构略有差异，按优先级回退 */
@@ -301,118 +300,73 @@ function moveNativeSearch(host: HTMLElement): boolean {
   return true;
 }
 
-/** 右栏隐藏后把三栏 flex 行改为居中；右栏恢复时撤销，避免破坏原布局 */
-function applyRecenter(): void {
-  if (!CONFIG.sidebar.recenter) return;
-  const row = findSidebar()?.parentElement;
-  if (!row) return;
-  if (hidden) {
-    row.style.justifyContent = 'center';
-    row.dataset.teCentered = '1';
-  } else {
-    row.style.justifyContent = '';
-    delete row.dataset.teCentered;
-  }
-}
-
-/**
- * 左栏（导航侧栏）容器：X 用 position:fixed 把它钉在视口左侧（left:320px），
- * 主列被居中后左栏不会跟着走，中间会裂开一道空白。按 fixed 定位特征找，不认哈希 class。
- */
-function findRail(): HTMLElement | null {
-  const logo = document.querySelector<HTMLElement>('a[aria-label="X"]');
-  let el = logo?.parentElement ?? null;
-  while (el && el !== document.body) {
-    if (getComputedStyle(el).position === 'fixed') return el;
-    el = el.parentElement;
-  }
-  return null;
-}
-
 /** 导航条搜索框开关（菜单里可切换，状态持久化） */
 let searchEnabled = CONFIG.search.enabled;
 
-/** 已加过锚点样式的元素，用于关闭 / 还原时清理 */
-let anchoredRail: HTMLElement | null = null;
-let anchoredSidebar: HTMLElement | null = null;
+/**
+ * 左导航条（rail）**完全不动**。
+ *
+ * 旧版按「主列左缘 − 导航条宽」把 fixed 导航条重新钉一遍（并锁死 width/right），
+ * 理由是「主列一旦居中就会脱节」。铺满内容区后主列左缘恒等于 X 内容区左缘，
+ * 2026-09-08 真机复核：把脚本写上去的内联样式整条剥掉，X 自己算出的位置
+ * （1440 视口 left 87.5px；右栏显示 / 隐藏两种状态都一样）与主列左缘关系
+ * （主列左缘 − 导航条宽）完全吻合，也就是说这层覆盖已经没有任何补偿作用，
+ * 只留下「/home 的导航条由脚本摆、/i/grok 由 X 摆」的机制差异。
+ * 现在两个 tab 共用 X 自己的 fixed 定位，脚本不再写一个字节。
+ */
 
-function resetRail(): void {
-  if (!anchoredRail) return;
-  for (const prop of ['left', 'right', 'width']) {
-    anchoredRail.style.removeProperty(prop);
-  }
-  anchoredRail = null;
-}
+/** 已加过锚点样式的元素，用于关闭 / 还原时清理 */
+let anchoredSidebar: HTMLElement | null = null;
+/**
+ * 被改成左对齐（右栏显示时的锚定布局）的三栏行；右栏隐藏后必须还原 X 原生的
+ * space-between —— 右栏隐藏时主列铺满内容区、行里只剩一个子节点，原生 space-between
+ * 等价于左对齐，与 /i/grok 的行一致；留着 flex-start 虽看不出差别，但会让「行样式」
+ * 在两个页面之间不一致，日后排错容易误判。
+ */
+let anchoredRow: HTMLElement | null = null;
 
 function resetSidebarAnchor(): void {
-  if (!anchoredSidebar) return;
-  anchoredSidebar.style.removeProperty('margin-left');
-  anchoredSidebar = null;
+  if (anchoredSidebar) {
+    anchoredSidebar.style.removeProperty('margin-left');
+    anchoredSidebar = null;
+  }
+  if (anchoredRow) {
+    anchoredRow.style.removeProperty('justify-content');
+    anchoredRow = null;
+  }
 }
 
 /**
- * 以主列（时间线）为锚点摆放左右两栏：
- * - 左栏右缘贴主列左缘（间距 RAIL_GAP，X 原生为 0）；
- * - 右栏左缘距主列右缘 SIDEBAR_GAP（30px），由 flex-start + margin-left 保证，
- *   不再依赖 space-between 在剩余空间里"随机"分配。
+ * 右栏显示时把它钉在主列右侧 SIDEBAR_GAP（30px）：行改左对齐 + 右栏 margin-left。
+ * 不依赖 space-between 在剩余空间里"随机"分配（行被 min-width 撑开后剩余空间会变）。
+ *
+ * 左导航条不在此处处理 —— 它由 X 自己 fixed 定位，脚本不写（见上面 rail 的说明）。
  */
-function applyAnchor(): void {
-  const primary = document.querySelector<HTMLElement>(PRIMARY);
-  if (!CONFIG.sidebar.anchor || !primary) {
-    resetRail();
-    resetSidebarAnchor();
-    return;
-  }
-
-  const primaryBox = primary.getBoundingClientRect();
-  if (primaryBox.width === 0) return;
-
-  const rail = findRail();
-  const railBox = rail?.getBoundingClientRect();
-  if (rail && railBox && railBox.width > 0) {
-    const width = Math.round(railBox.width);
-    // fixed 元素同时设了 left/right 时宽度由二者推算，必须先钉住宽度再放开 right
-    rail.style.width = `${width}px`;
-    rail.style.right = 'auto';
-    rail.style.left = `${Math.round(primaryBox.left - width - RAIL_GAP)}px`;
-    anchoredRail = rail;
-  } else {
-    resetRail();
-  }
-
+function applySidebarGap(): void {
   const sidebar = findSidebar();
   const row = sidebar?.parentElement ?? null;
-  if (!sidebar || !row || hidden) {
+  // 功能开关关闭 / 右栏隐藏 / 结构未就绪 → 交回 X 原生（space-between）
+  // 这一步不做任何测量（只写固定 30px 间距），因此不需要等布局就绪
+  if (!CONFIG.sidebar.anchorSidebar || hidden || !sidebar || !row) {
     resetSidebarAnchor();
     return;
   }
-  // 右栏显示时改为左对齐 + 固定间距，右栏就紧跟主列，不再被推到行的另一端
   row.style.justifyContent = 'flex-start';
   sidebar.style.marginLeft = `${SIDEBAR_GAP}px`;
   anchoredSidebar = sidebar;
-}
-
-/** 主列尺寸 / 视口变化都要重新锚定（主列位置会随居中结果变化） */
-function watchAnchor(): void {
-  const primary = document.querySelector<HTMLElement>(PRIMARY);
-  const row = findSidebar()?.parentElement ?? null;
-  if (typeof ResizeObserver !== 'undefined') {
-    if (primary) new ResizeObserver(() => applyAnchor()).observe(primary);
-    if (row) new ResizeObserver(() => applyAnchor()).observe(row);
-  }
-  window.addEventListener('resize', () => applyAnchor());
-  // timeline-width 调整行宽 / 主列宽度后会广播 te:layout，此时主列位置才是最终值
-  document.addEventListener('te:layout', applyAnchor);
+  anchoredRow = row;
 }
 
 let hidden = CONFIG.sidebar.hiddenByDefault;
 
 function applyHidden(value: boolean): void {
-  const changed = value !== hidden;
+  const attribute = value ? 'off' : 'on';
+  // 以属性实际变化为准（首轮从「未设置」到 off 也算变化）：宽时间线以这个属性为准，
+  // feature 启用顺序不该影响它能否收到通知。
+  const changed = document.documentElement.dataset.teSidebar !== attribute;
   hidden = value;
-  document.documentElement.dataset.teSidebar = value ? 'off' : 'on';
-  applyRecenter();
-  applyAnchor();
+  document.documentElement.dataset.teSidebar = attribute;
+  applySidebarGap();
   // 右栏显隐会改变主列可用宽度，通知宽时间线重算（旧版靠观察 data-te-sidebar 属性，
   // 已随全站观察器收敛移除，改由显式事件驱动）
   if (changed) dispatchLayoutEvent();
@@ -421,6 +375,7 @@ function applyHidden(value: boolean): void {
 function toggleSidebar(): void {
   applyHidden(!hidden);
   void writeFlag('sidebar', hidden);
+  notifySettingsChanged();
 }
 
 /**
@@ -447,6 +402,7 @@ function applySearchEnabled(value: boolean): void {
 function toggleSearch(): void {
   applySearchEnabled(!searchEnabled);
   void writeFlag('nav-search', searchEnabled);
+  notifySettingsChanged();
 }
 
 /**
@@ -495,8 +451,7 @@ export function enableSidebarSearch(): void {
     const mounted = document.querySelector<HTMLElement>('.te-search-host');
     if (mounted?.isConnected) {
       if (CONFIG.search.mode === 'move') moveNativeSearch(mounted);
-      applyRecenter();
-      applyAnchor();
+      applySidebarGap();
       return;
     }
 
@@ -511,13 +466,11 @@ export function enableSidebarSearch(): void {
     }
 
     mountBesideLogo(nav, host);
-    applyRecenter();
-    applyAnchor();
+    applySidebarGap();
 
     if (!watching) {
       watching = true;
       watchInner(findInner(nav), nav, host);
-      watchAnchor();
     }
   };
 
@@ -530,11 +483,13 @@ export function enableSidebarSearch(): void {
 
   // 订阅 dom-watch 单例派发的合并批次（120ms 节流）。
   // 只在与导航条 / 侧栏 / 右栏结构相关的变更时才做校正，避免滚动时虚拟列表
-  // 插入推文触发无谓的几何重算（applyAnchor / mountBesideLogo 含测量）。
+  // 插入推文触发无谓的几何重算（applySidebarGap / mountBesideLogo 含测量）。
   // 用 setTimeout 语义由 dom-watch 提供（后台标签页不被冻结），
   // 回前台由 dom-watch 的 visibilitychange 兜底冲刷。
-  onDomChanged(({ added, overflow: hadOverflow }) => {
-    if (hadOverflow) {
+  onDomChanged(({ added, overflow: hadOverflow, structural }) => {
+    // 结构性替换（SPA 导航重挂 app shell）：主列 / 三栏行 / 左栏都换了新节点，
+    // 补偿样式必须立刻重写（本批次由 dom-watch 在渲染帧前同步派发）。
+    if (hadOverflow || structural) {
       sync();
       return;
     }
@@ -559,20 +514,31 @@ export function enableSidebarSearch(): void {
     if (relevant) sync();
   });
 
-  // SPA 导航会重建右栏 / 三栏行容器，锚点与居中补偿写在节点上会随旧节点一起消失：
+  // SPA 导航会重建右栏 / 三栏行容器，锚点与行对齐样式写在节点上会随旧节点一起消失：
   // 路由切换（低频）直接做一次轻量校正（sync 的快速路径只做廉价检查）。
   onRouteChanged(() => sync());
 
+  // 宽时间线重算行宽后会广播 te:layout：右栏显示时主列宽度刚变，右栏的 30px 间距
+  // 与行对齐需要跟着是最终值（写入幂等、无需测量，代价可忽略）。
+  document.addEventListener('te:layout', applySidebarGap);
+
   interceptSlashShortcut();
 
-  registerToggleMenu({
-    label: (enabled) => `右侧栏：${enabled ? '显示' : '隐藏'}`,
+  registerSetting({
+    id: 'sidebar',
+    group: '布局',
+    label: '显示右侧栏',
+    description: '关闭后隐藏右栏，把横向空间让给主列',
+    shortcut: 'Alt+B',
     isEnabled: () => !hidden,
     toggle: toggleSidebar,
   });
 
-  registerToggleMenu({
-    label: (enabled) => `导航条搜索框：${enabled ? '开' : '关'}`,
+  registerSetting({
+    id: 'nav-search',
+    group: '布局',
+    label: '导航条搜索框',
+    description: '在左栏 logo 右侧显示搜索框（回车跳转搜索页）',
     isEnabled: isSearchEnabled,
     toggle: toggleSearch,
   });
