@@ -5,6 +5,10 @@
 # Node
 node_modules/
 
+# 本项目只用 npm；混进来的 pnpm / yarn lockfile 一律不提交
+pnpm-lock.yaml
+yarn.lock
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

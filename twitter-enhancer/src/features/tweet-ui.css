@@ -1,5 +1,5 @@
 /**
- * 推文 UI 重设计（详见 design-system/twitter-enhancer/pages/timeline.md）。
+ * 推文 UI 重设计（取值理由与实测结论见 docs/design-notes.md）。
  *
  * 约束：
  * 1. 所有规则挂在 html[data-te-ui='on'] 下，可用 Alt+U 整体关闭；

@@ -15,7 +15,7 @@ export const CONFIG: {
    * 落在该区间内且明显窄于主列的元素会被放开到 100%。
    */
   lockedWidthRange: [number, number];
-  /** 推文 UI 重设计（详见 features/tweet-ui.ts 与设计文档 pages/timeline.md） */
+  /** 推文 UI 重设计（令牌与约束见 features/tweet-ui.css 头部，取值理由见 docs/design-notes.md） */
   tweetUi: {
     /** 是否默认启用（可用 Alt+U 在页面上实时切换） */
     enabledByDefault: boolean;
