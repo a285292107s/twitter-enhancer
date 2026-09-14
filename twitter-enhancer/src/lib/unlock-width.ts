@@ -16,7 +16,10 @@
  * 5. 队列长度有上限（防虚拟滚动下无界增长），后台 rAF 冻结由 visibilitychange
  *    与 dom-watch 的兜底冲刷覆盖；
  * 6. 只在元素写死宽（560–660px 且明显窄于容器）时打 data-te-width-unlocked，
- *    由 CSS 放开到 100%；
+ *    由 CSS 放开到 100%。**媒体轮播（ScrollSnap-List）子树除外**：轮播格的宽度是
+ *    「行高 × 内联 aspect-ratio」推出来的媒体比例，数值可能正好落在锁宽区间里
+ *    （实测 2026-09-14：3 竖图轮播 行高 757 × 0.74248 = 562px），误解锁会把整格
+ *    拉成 100% 列宽，竖图被放大铺满；详见 CAROUSEL_SCOPE 注释；
  * 7. 打标记本身不改变任何样式 —— 「放开到 100%」的 CSS 挂在宽时间线开关下。
  *    因此开关关闭 / 主列是 X Chat 私信界面时，标记既不产生视觉效果又白耗全树
  *    扫描，必须靠 isActive 停摆并撤销已有标记（见 options.isActive）。
@@ -26,6 +29,21 @@ import { onDomChanged } from './dom-watch';
 
 /** 打在元素上的标记属性名（data-te-width-unlocked） */
 const FLAG = 'teWidthUnlocked';
+
+/**
+ * 媒体轮播作用域：X 的横向轮播容器，下面的每一格（含格内的 tweetPhoto / img）
+ * 宽度都由「行高 × 内联 aspect-ratio」推出，是**媒体比例**而不是写死的容器宽度。
+ *
+ * 实测（2026-09-14，1440 视口，headless 独立 profile，推文 /status/…）：
+ * 3 张竖图（原图 1521×2048，比例 0.74248）的轮播格在行高 757 时宽 562px，
+ * 正好落在 CONFIG.lockedWidthRange [560, 660] 里 → 被误判成「X 写死的 600px
+ * 容器」并放开到 100%（946px）：media-cap 只压了行高（757→540），格宽仍是整列，
+ * 竖图被放大铺满整列（观感「图片宽高都不再受限」）。是否命中取决于解锁器的 BFS
+ * 分片扫描与 media-cap 的 rAF 钳制谁先跑到该节点，因此同一页面冷加载时好时坏。
+ *
+ * 轮播格的宽高必须交回 X 自己算，这里整棵子树都不参与解锁。
+ */
+const CAROUSEL_SCOPE = '[data-testid="ScrollSnap-List"]';
 
 export interface UnlockOptions {
   /** 被写死的宽度区间 [min, max]（px），只有落在该区间内的固定宽度才视为锁死 */
@@ -96,6 +114,9 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
   function unlock(el: Element): void {
     if (!(el instanceof HTMLElement)) return;
     if (el.dataset[FLAG] || !container) return;
+    // 轮播格（及其内部的 tweetPhoto / img）宽度是媒体比例推出来的，不是写死的容器
+    // 宽度 —— 数值可能落在 lockedRange 内，这里必须放过（见 CAROUSEL_SCOPE 注释）。
+    if (el.closest(CAROUSEL_SCOPE)) return;
     const containerWidth = container.clientWidth;
     if (containerWidth <= 0) return;
     const style = getComputedStyle(el);

@@ -2,7 +2,8 @@
  * 用 jsdom 回归验证脚本运行时行为（无需打开 x.com）。
  *
  * 覆盖：
- * 1. 宽度解锁器 unlock-width：按计算值识别并解除被写死的 600px 容器；
+ * 1. 宽度解锁器 unlock-width：按计算值识别并解除被写死的 600px 容器
+ *    （媒体轮播 ScrollSnap-List 子树除外：格宽是媒体比例，可能正好落在锁宽区间里）；
  * 2. 推文 UI tweet-ui：主题检测、设计令牌注入、Alt+U 开关与持久化；
  * 3. 侧栏与搜索 sidebar：右栏隐藏、搜索宿主挂载、Alt+B 双向切换；
  * 4. 宽时间线 timeline-width：右栏隐藏时主列铺满 X 内容区（与 /i/grok 一致、左缘不动），
@@ -702,6 +703,63 @@ expect('包裹层同步解锁', wrapM.dataset.teMediaCapped, undefined);
 expect('解锁后清除 height', regionM.style.height, '');
 expect('解锁后清除包裹层 height', wrapM.style.height, '');
 expect('解锁后还原包裹层原始 padding', wrapM.style.paddingBottom, 'calc(100% - 4px)');
+
+// ================= 实例二十七：媒体轮播格不被宽度解锁器误伤 =================
+// 真机缺陷（2026-09-14 实测，1440 视口，headless 独立 profile，推文详情页）：
+// X 的横向轮播（data-testid=ScrollSnap-List）里每一格的宽度 = 行高 × 内联
+// aspect-ratio —— 3 竖图轮播实测 757 × 0.74248 = 562px，正好落在
+// CONFIG.lockedWidthRange [560, 660] 里，被误判成「X 写死的 600px 容器」放开到
+// 100%（946px = 整列宽）：media-cap 只压了行高，格宽仍是整列，竖图被放大铺满
+// 整列（观感「图片宽高都不再受限」）。命中与否取决于解锁器 BFS 分片扫描与
+// media-cap 的 rAF 钳制谁先跑到该节点，所以同一页面冷加载时好时坏。
+// 修正后：轮播子树整体不参与解锁；轮播之外写死同样宽度的容器仍要正常解锁。
+const HTML_CAROUSEL = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="carouselTweet" style="width:600px">
+          <div data-testid="ScrollSnap-List">
+            <div id="carouselCell" style="width:562px">轮播格（宽度来自媒体比例）</div>
+            <div data-testid="tweetPhoto"><img id="carouselImg" style="width:560px" /></div>
+          </div>
+          <div id="lockedInTweet" style="width:600px">轮播推文里轮播之外的写死容器</div>
+          <div id="fixed562Outside" style="width:562px">轮播之外的写死 562px</div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wCar = createWindow(HTML_CAROUSEL);
+wCar.eval(script);
+await sleep(220);
+expect(
+  '轮播格（562px，正好落在锁宽区间内）不被打解锁标记',
+  wCar.document.getElementById('carouselCell').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '轮播格内的 tweetPhoto / img 不被打解锁标记',
+  wCar.document.getElementById('carouselImg').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '轮播之外写死 562px 的容器照旧解锁（排除的是作用域而不是宽度）',
+  wCar.document.getElementById('fixed562Outside').dataset.teWidthUnlocked,
+  'fixed',
+);
+expect(
+  '轮播所在的推文容器（600px 上限）仍被解锁',
+  wCar.document.getElementById('carouselTweet').dataset.teWidthUnlocked,
+  'fixed',
+);
+expect(
+  '轮播推文里、轮播之外的写死容器仍被解锁',
+  wCar.document.getElementById('lockedInTweet').dataset.teWidthUnlocked,
+  'fixed',
+);
 
 // ================= 实例二十：dom-watch 溢出（单批超池上限）后整树补扫 =================
 // 旧版 bug：overflow 分支 reset() 清空待检队列后 flush() 因队列为空不会调度任何

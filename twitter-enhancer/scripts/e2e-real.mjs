@@ -330,6 +330,12 @@ ${bundle}
     /* ============ 3. 媒体钳制机制（确定性注入，走真实布局） ============ */
     // 注入与 X 轮播同构的行：宿主 718 宽 + aspect-ratio 撑出 ~1077 自然高，
     // 内部媒体格 height:100%（压宿主高度后会随之重排 → 布局校验通过，不会触发还原）。
+    // 先等时间线真的渲染出第一条 cellInnerDiv：主列挂载（上面的断言依赖它）比
+    // 首屏推文早得多 —— 实测 2026-09-14 冷启动时主列已在、cellInnerDiv 还要 ~5s
+    // 才出现，直接注入会以「页面没有 cellInnerDiv」整轮失败。
+    await page
+      .waitForSelector('[data-testid="cellInnerDiv"]', { timeout: 30000 })
+      .catch(() => console.warn('[e2e] 等待 cellInnerDiv 超时（30s），时间线可能为空'));
     await page.evaluate(() => {
       const cell = document.querySelector('[data-testid="cellInnerDiv"]');
       if (!cell) throw new Error('页面没有 cellInnerDiv，无法注入测试宿主');
