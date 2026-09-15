@@ -55,7 +55,6 @@ startTimelineWatch();
 exposeDebugSurface();
 
 for (const feature of features) {
-  if (!feature.enabled) continue;
   try {
     feature.enable();
   } catch (error) {

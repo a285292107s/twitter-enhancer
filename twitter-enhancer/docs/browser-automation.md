@@ -58,6 +58,37 @@ npm run e2e:real
 - 浏览器铁律同 `x-te`。脚本依赖全局 `@playwright/cli` 与 `ms-playwright` 缓存内核，
   迁移机器时要改 `resolvePlaywright()` / `resolveExecutable()`（也可用 `TE_E2E_EXECUTABLE` 指定内核）。
 
+## 定时漂移探测
+
+`npm run verify` 跑的是**我们自己的 jsdom 夹具** —— X 改锚点、改包装层，它一条断言都不会红。
+唯一能发现「X 改版 ⇒ 功能静默失效」的检测器是 `npm run e2e:real`（真实布局引擎 + 当前 DOM），
+而它只在有人敲命令时才跑。`scripts/e2e-scheduled.ps1` 就是让它定时跑起来的那一层。
+
+```powershell
+# 注册（已完成，勿重复注册）：每周一 10:00；错过则在下次开机后补跑
+$pwsh = (Get-Command pwsh).Source
+$action   = New-ScheduledTaskAction -Execute $pwsh -Argument `
+  '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\28529\Desktop\油猴脚本-推特网页优化\twitter-enhancer\scripts\e2e-scheduled.ps1"'
+$trigger  = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 10:00
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'twitter-enhancer-e2e-drift' -Action $action -Trigger $trigger `
+  -Settings $settings -Description 'twitter-enhancer：真实 x.com 上定期跑门禁，探测 X 改版导致的静默失效' `
+  -Principal (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited) -Force
+
+# 立刻跑一次 / 看上次结果 / 卸载
+Start-ScheduledTask -TaskName 'twitter-enhancer-e2e-drift'
+Get-ScheduledTaskInfo -TaskName 'twitter-enhancer-e2e-drift'
+Unregister-ScheduledTask -TaskName 'twitter-enhancer-e2e-drift' -Confirm:$false
+```
+
+- 日志与失败标记在 `browser-profiles/e2e-logs/`（已 gitignore，只留最近 20 份）。
+  失败会写 `LAST-FAILURE.txt` —— **先看它，再翻当次日志**，不要只依赖计划任务历史。
+- **归因**：脚本先 verify 再 e2e。verify 红 = 我们自己的代码 / 夹具坏了；
+  verify 绿而 e2e 红 = X 漂移，或 `x-te-e2e` 的登录态过期（后者表现为大量几何为 0 / 出现 loginButton）。
+- 它同时是**登录态探测器**：profile 或 `auth.json` 失效时它会红，比用户发现「脚本不生效」早一步。
+- 铁律不变：跑的是独立 profile `x-te-e2e`，不碰用户自己的浏览器。
+
 ## 登录态维护
 
 状态：仓库根 `auth.json`（Playwright storageState，含 `auth_token`/`ct0`/`twid`，**已 gitignore**）

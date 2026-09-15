@@ -2311,32 +2311,26 @@
 	var features = [
 		{
 			name: "timeline-width",
-			enabled: true,
 			enable: enableTimelineWidth
 		},
 		{
 			name: "tweet-ui",
-			enabled: true,
 			enable: enableTweetUi
 		},
 		{
 			name: "sidebar-search",
-			enabled: true,
 			enable: enableSidebarSearch
 		},
 		{
 			name: "media-cap",
-			enabled: true,
 			enable: enableMediaCap
 		},
 		{
 			name: "content-column",
-			enabled: true,
 			enable: enableContentColumn
 		},
 		{
 			name: "settings-panel",
-			enabled: true,
 			enable: enableSettingsPanel
 		}
 	];
@@ -2366,12 +2360,9 @@
 	startPageWatch();
 	startTimelineWatch();
 	exposeDebugSurface();
-	for (const feature of features) {
-		if (!feature.enabled) continue;
-		try {
-			feature.enable();
-		} catch (error) {
-			console.error(`[twitter-enhancer] 功能 ${feature.name} 启用失败`, error);
-		}
+	for (const feature of features) try {
+		feature.enable();
+	} catch (error) {
+		console.error(`[twitter-enhancer] 功能 ${feature.name} 启用失败`, error);
 	}
 })();

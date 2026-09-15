@@ -34,7 +34,7 @@ main.ts
 | `lib/observer-scope.ts` | `observers` Map + `observeElement()` | 不只管 MutationObserver，也管 `ResizeObserver`（本项目最容易踩「盯住被替换的旧节点」的地方） |
 | `lib/timeline.ts` | `observeTimeline()` / `observeIndividualTweetTimeline()` | **不新建观察器**，改为消费 dom-watch 批次 + `te:route`（全站单观察器是硬不变量）；占位层 → 真实层的等待用 `waitFor` + `stopIf` |
 | `lib/selectors.ts` | `Selectors` 枚举 | 只登记稳定属性锚点；**结构**判据留在功能模块里（判据属于功能，不属于锚点表） |
-| `lib/style-sheet.ts` | `addStyle()` + 各 `configureXxxCss()` | 只用于「取值来自 CONFIG」的规则（见下「样式放在哪」） |
+| `lib/style-sheet.ts` | `addStyle()` + 各 `configureXxxCss()` | 只用于「取值来自 CONFIG」的规则（见下「样式放在哪」）。**当前只有一个消费者**（设置按钮几何）—— 第二类出现之前不要再为它加能力，否则它会变成一个只有一条腿的框架 |
 
 ### 时间线不是一个稳定节点
 

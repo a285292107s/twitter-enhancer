@@ -10,6 +10,8 @@
 | `npm run build` | 只构建（`tsc && vite build`） |
 | `npm run dev` | `vite build --watch`，只重建 dist 产物 |
 | `npm run e2e:real` | 真机几何 E2E，见 [browser-automation.md](./browser-automation.md) |
+| `scripts/e2e-scheduled.ps1` | 计划任务调用的包装（verify + e2e + 日志与失败标记），同一文档 |
+| `node scripts/audit-subscriptions.mjs` | 逐条摘掉事件订阅、看门禁是否变红（回答「这条接线被测到了吗」，见下「夹具的已知边界」） |
 
 ## 新增 / 修改一个功能
 
@@ -63,6 +65,25 @@ jsdom 回归跑的是打包后的 IIFE，没有模块导出 —— 纯逻辑（�
 脚本的行为入口只有「页内设置面板 + 快捷键」两条，不能因为这个出口多出第三条。
 
 ## 夹具的已知边界
+
+### 事件接线的门禁覆盖现状（2026-09-15 实测）
+
+`node scripts/audit-subscriptions.mjs` 会逐条摘掉一个事件订阅、跑门禁，回答
+「摘掉它，门禁还红不红」。当时 **26 个订阅点里只有 2 条被 jsdom 门禁覆盖**：
+`media-cap` 的 `te:layout`（连带 5 项失败，首要断言「媒体回落到预算内自动解锁」）
+与媒体 `load` 捕获（2 项失败，「宿主 A 图片回落预算内后解锁」）。
+
+也就是说：**其余 24 条接线（路由 / 页面类型 / 时间线整层替换 / resize / visibilitychange /
+DOMContentLoaded / window load / fonts.ready）在 jsdom 里没有任何测试会在它被删掉或写坏时变红。**
+它们**不是多余的** —— 多数走的是真实浏览器里才有的路径（tab 切换、视口变化、字体就绪、回前台、SPA 导航），
+jsdom 根本走不到。绿的含义是**未覆盖**，不是不需要。三条结论：
+
+- **不要因为「摘掉它门禁还是绿的」就删订阅** —— 那是把「没测到」当成「不需要」；
+- 这些路径的第二个检测器是真机 E2E；`scripts/e2e-scheduled.ps1` + 计划任务让它定时跑起来
+  （见 [browser-automation.md](./browser-automation.md)「定时漂移探测」）；
+- 想给某条接线补覆盖：先用这个脚本确认它当前是否已被覆盖，再决定补断言还是删掉它。
+
+### 场景之间的顺序耦合
 
 `scripts/verify.mjs` 的场景之间**有顺序耦合**：末尾几段读的是前面建出来的 window
 （「按 CONFIG 拼装的样式表」那段读第一个窗口），另有若干共享的 HTML 夹具与辅助函数
