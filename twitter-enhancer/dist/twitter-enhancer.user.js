@@ -4,6 +4,7 @@
 // @version      0.0.3
 // @author       twitter-enhancer
 // @description  推特（X）网页体验优化：宽时间线 / 媒体高度钳制 / 内容列排版 / 推文新样式 / 右侧栏与导航条搜索框，开关在页内右下角设置面板
+// @license      MIT
 // @match        https://x.com/*
 // @match        https://www.x.com/*
 // @match        https://twitter.com/*

@@ -116,3 +116,9 @@ npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.
 [control-panel-for-twitter](https://github.com/insin/control-panel-for-twitter) 的写法
 （观察器 / 等待器 / 页面类型 / 选择器注册表），取舍按本项目的实测结论重做过，
 差异逐条记在 `docs/architecture.md`。
+
+## 许可
+
+[MIT](./LICENSE) © 2026 大白兔奶糖 —— 可以自由使用、修改、再分发（保留版权与许可声明即可）。
+产物头部也带着 `@license MIT`（见 `twitter-enhancer/vite.config.ts`），
+所以**单独下载那个 `.user.js` 再分发时，许可信息跟着产物一起走**，不会只留在仓库里。
