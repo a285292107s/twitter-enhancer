@@ -21,6 +21,12 @@
   --te-body-size: 16px;
   --te-body-lh: 1.5;
   --te-measure: 72ch;
+  /* 版心的 px 兜底值：16px Chirp 下 72ch 的实测解析值（2026-09-14 真机 763.776px，取整）。
+     tweet-ui.ts 会用真实正文元素的解析结果覆盖它（见 publishSpine）—— 之所以要有默认值：
+     首屏推文出现之前拿不到正文样本，而 `72ch` 这个兜底会按**元素自身字号**解析，
+     操作栏继承 X 的 15px 时只有 633px，会出现一段「操作栏只有 633px 宽」的中间态。
+     消费方是 content-column 的版心规则（`max-width: var(--te-spine, var(--te-measure))`）。 */
+  --te-spine: 764px;
 
   --te-text: #0f1419;
   --te-text-secondary: #536471;

@@ -9,6 +9,10 @@
  *
  * 状态刷新：开关可能从面板点击切换，也可能从页面快捷键（Alt+U / Alt+B）切换，
  * 两条路径都经过 notifySettingsChanged()，面板据此同步开关的 aria-checked。
+ *
+ * **新增开关不要直接调 registerSetting**：走 `lib/toggle.ts` 的 `createToggle()` ——
+ * 它把「默认值 / 异步存储读取 / 写盘 / 面板刷新」和这里的登记一起包成一条协议。
+ * 本模块只负责「登记 + 广播」这一层，面板是它唯一的消费者。
  */
 
 export interface SettingItem {

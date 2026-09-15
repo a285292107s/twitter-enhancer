@@ -21,8 +21,8 @@
  * 帧统一执行；结构性变化（te:layout / 路由 / overflow / load）走整树补扫。
  */
 import { CONFIG } from '../config';
-import { registerSetting, notifySettingsChanged } from '../lib/settings';
-import { readFlag, writeFlag } from '../lib/store';
+import { createToggle } from '../lib/toggle';
+import { createFrameQueue } from '../lib/frame-work';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
 import { currentStatusPath } from '../lib/page';
@@ -42,27 +42,18 @@ const CAPTION_ATTR = 'teCaption';
 
 /** 轮播宿主向上查找的最大层数（防在异常 DOM 上爬太远） */
 const HOST_MAX_DEPTH = 6;
-const FALLBACK_FRAME_MS = 16;
 
+/** 内容列排版的当前值 —— 与 createToggle 同步的镜像（理由见 timeline-width.ts 同类注释） */
 let enabled = CONFIG.column.enabledByDefault;
 
 /* ------------------------------------------------------------------ *
- * 帧任务合并：批次回调只收集，工作在下一个 rAF 帧里做
+ * 帧任务合并：批次回调只收集，工作在下一个渲染帧里做。
+ * 队列本身（同帧合并 / 没有 rAF 时退回 setTimeout）由 lib/frame-work.ts 提供；
+ * 本模块的增量批次与整树补扫共用同一个队列、同一帧（分支见 runFrameWork）。
  * ------------------------------------------------------------------ */
-let frameQueued = false;
+const frameQueue = createFrameQueue('content-column');
 let pendingArticles: Set<HTMLElement> | null = null;
 let fullScanPending = false;
-
-function queueFrameWork(): void {
-  if (frameQueued) return;
-  frameQueued = true;
-  const run = (): void => {
-    frameQueued = false;
-    runFrameWork();
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-  else setTimeout(run, FALLBACK_FRAME_MS);
-}
 
 function runFrameWork(): void {
   if (!enabled) return;
@@ -75,9 +66,6 @@ function runFrameWork(): void {
   const batch = pendingArticles;
   pendingArticles = null;
   if (!batch) return;
-  // 首屏推文是从新增节点池里来的：这里补一次版心解析（load / DOMContentLoaded
-  // 常常早于推文渲染，那两次拿不到正文样本）
-  resolveSpine();
   for (const article of batch) {
     if (article.isConnected) processArticle(article);
   }
@@ -85,7 +73,7 @@ function runFrameWork(): void {
 
 function scheduleFullScan(): void {
   fullScanPending = true;
-  queueFrameWork();
+  frameQueue.schedule('work', runFrameWork);
 }
 
 /* ------------------------------------------------------------------ *
@@ -171,9 +159,6 @@ function findCarouselHost(list: HTMLElement): HTMLElement | null {
 
 /** 已挂过滚动监听的轮播列表 */
 const wiredLists = new WeakSet<HTMLElement>();
-/** 待在本帧更新序号的 (列表 → 宿主) */
-const indexTargets = new Map<HTMLElement, HTMLElement>();
-let indexFrameQueued = false;
 
 /**
  * 序号 = 左缘（RTL 下为右缘）离列表可视起点最近的那一格。
@@ -199,25 +184,16 @@ function updateCarouselIndex(list: HTMLElement, host: HTMLElement): void {
   if (host.dataset[CAROUSEL_ATTR] !== label) host.dataset[CAROUSEL_ATTR] = label;
 }
 
-function flushCarouselIndexes(): void {
-  indexFrameQueued = false;
-  if (!enabled) {
-    indexTargets.clear();
-    return;
-  }
-  const targets = [...indexTargets];
-  indexTargets.clear();
-  for (const [list, host] of targets) {
-    if (host.isConnected) updateCarouselIndex(list, host);
-  }
-}
-
+/**
+ * 序号更新排进同一个帧队列，用**列表元素本身**当去重 key：
+ * 同一个列表在同一帧里被滚动事件更新多次时，只有最后那次的宿主会被采用。
+ * （旧实现用 `indexTargets: Map<列表 → 宿主>` + 独立的 `indexFrameQueued` 表达同一件事，
+ * 于是本模块里有两个互不相干的帧队列，见 lib/frame-work.ts 文件头。）
+ */
 function scheduleCarouselIndex(list: HTMLElement, host: HTMLElement): void {
-  indexTargets.set(list, host);
-  if (indexFrameQueued) return;
-  indexFrameQueued = true;
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flushCarouselIndexes);
-  else setTimeout(flushCarouselIndexes, FALLBACK_FRAME_MS);
+  frameQueue.schedule(list, () => {
+    if (enabled && host.isConnected) updateCarouselIndex(list, host);
+  });
 }
 
 function markCarousel(article: HTMLElement): void {
@@ -243,8 +219,6 @@ function processArticle(article: HTMLElement): void {
 /** 整树补扫：先清掉焦点帖标记（SPA 导航后旧焦点帖可能已不是焦点），再逐条处理 */
 function scanAll(): void {
   clearHeroMarks();
-  // 版心要等首屏正文出现才能读到（取决于正文的解析字号）
-  resolveSpine();
   const path = currentStatusPath();
   for (const article of document.querySelectorAll<HTMLElement>(TWEET_SELECTOR)) {
     classifyCaption(article);
@@ -284,36 +258,11 @@ function clearMarks(): void {
  * ------------------------------------------------------------------ */
 
 /**
- * 版心宽度（px）。
- *
- * 为什么不能直接用 `72ch`：ch 是**相对元素自身字号**的长度单位。同一页里
- * 正文 16px、操作栏继承 X 的 15px，`72ch` 会被解析成两条不同的右边界
- * （2026-09-14 真机实测：操作栏 max-width 633.34px，正文 763.776px）。
- *
- * 取值方式：直接读真实正文元素上 72ch 的解析结果 —— 那就是阅读流的右边界，
- * 不需要自己量 ch（实测「72 个 0」的宽度与 72ch 的解析结果并不相等：
- * 同一字体下前者 785px、后者 764px，所以不能用量尺反推）。
- * 短句帖的正文按 20px 排版，而 ch 随字号线性缩放，按 fontSize 换算回正文字号。
+ * 版心（`--te-spine`）**不由本模块发布**：它由写 `--te-measure` 的那一层测量并写进
+ * `:root`（见 features/tweet-ui.ts 的 publishSpine）—— 那是唯一知道 ch 怎么解析的地方。
+ * 本模块只是消费方（CSS 里 `max-width: var(--te-spine, var(--te-measure))`），
+ * 既不碰 computed style，也不需要读另一个功能的开关状态。
  */
-let spineResolved = false;
-
-function resolveSpine(force = false): void {
-  if (spineResolved && !force) return;
-  // 只有推文 UI 开启时正文上的 max-width 才是我们的 72ch
-  if (document.documentElement.dataset.teUi !== 'on') return;
-  const sample = document.querySelector<HTMLElement>(SEL.tweetText);
-  if (!sample) return;
-  const style = getComputedStyle(sample);
-  if (!style.maxWidth.endsWith('px')) return;
-  const size = Number.parseFloat(style.fontSize);
-  const measure = Number.parseFloat(style.maxWidth);
-  if (!(size > 0) || !(measure > 0)) return;
-  const px = Math.round((measure / size) * CONFIG.tweetUi.bodyFontSize);
-  if (px <= 0) return;
-  document.documentElement.style.setProperty('--te-spine', `${px}px`);
-  spineResolved = true;
-}
-
 function applyTokens(): void {
   const root = document.documentElement;
   const { column } = CONFIG;
@@ -322,24 +271,24 @@ function applyTokens(): void {
   root.style.setProperty('--te-caption-short-size', `${column.shortFontSize}px`);
 }
 
-function setEnabled(value: boolean): void {
+function applyEnabled(value: boolean): void {
   enabled = value;
   document.documentElement.dataset.teColumn = value ? 'on' : 'off';
   if (value) scheduleFullScan();
   else clearMarks();
 }
 
-function toggleColumn(): void {
-  setEnabled(!enabled);
-  void writeFlag('content-column', enabled);
-  notifySettingsChanged();
-}
-
 export function enableContentColumn(): void {
   applyTokens();
-  setEnabled(enabled);
-  void readFlag('content-column').then((stored) => {
-    if (stored !== null && stored !== enabled) setEnabled(stored);
+  // 开关：默认值 / 存储读取 / 写盘 / 面板登记与刷新全部交给 createToggle（见 lib/toggle.ts）。
+  // 构造时的第一次 apply 会走 applyEnabled，也就是首帧那次整树补扫。
+  createToggle({
+    id: 'content-column',
+    group: '内容',
+    label: '内容列排版',
+    description: '正文按内容分层（emoji / 短句 / 长文）、操作栏收进版心、焦点帖加结构分隔',
+    default: CONFIG.column.enabledByDefault,
+    apply: applyEnabled,
   });
 
   if (document.readyState === 'loading') {
@@ -357,40 +306,20 @@ export function enableContentColumn(): void {
     if (added.length === 0) return;
     if (!pendingArticles) pendingArticles = new Set();
     collectArticles(added, pendingArticles);
-    queueFrameWork();
+    frameQueue.schedule('work', runFrameWork);
   });
 
   // 列宽调整 / 右栏显隐 / SPA 路由都会重排或重建推文子树：整树补扫一次
   document.addEventListener('te:layout', () => {
-    if (enabled) {
-      resolveSpine(true);
-      scheduleFullScan();
-    }
+    if (enabled) scheduleFullScan();
   });
   onRouteChanged(() => {
     if (enabled) scheduleFullScan();
   });
   // 时间线**整层被替换**（标签页切换 / X 先用占位层再换真实层）：写在旧层节点上的
-  // 标记与轮播序号随之失效，整树补扫一次。与上面的路由补扫会在同一个 rAF 帧里合并
-  // （fullScanPending + queueFrameWork），不会重复扫。
+  // 标记与轮播序号随之失效，整树补扫一次。与上面的路由补扫会在同一个帧里合并
+  // （同一个队列 + 同一个 key + fullScanPending 分支），不会重复扫。
   onTimelineChanged(() => {
     if (enabled) scheduleFullScan();
-  });
-
-  // 字体加载 / 布局变化后正文的 72ch 可能变宽（回退字体与 Chirp 不等宽）：重读一次
-  window.addEventListener('load', () => resolveSpine(true), { once: true });
-  try {
-    void document.fonts?.ready?.then(() => resolveSpine(true));
-  } catch {
-    // 极早期没有 document.fonts 时忽略：CSS 侧还有 72ch 兜底
-  }
-
-  registerSetting({
-    id: 'content-column',
-    group: '内容',
-    label: '内容列排版',
-    description: '正文按内容分层（emoji / 短句 / 长文）、操作栏收进版心、焦点帖加结构分隔',
-    isEnabled: () => enabled,
-    toggle: toggleColumn,
   });
 }

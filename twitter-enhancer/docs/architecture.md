@@ -57,8 +57,26 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
    与**被测得的几何**（`--te-timeline-width`、`--te-spine`）。后者还有一个硬理由：
    CSS 文件里 `html[data-te-column='on']` 的特异性高于 `:root`，只有内联变量能稳定压过默认值。
 
+## 本项目自己长出来的三块地基
+
+上面那张表是「照参考实现收敛出来的抽象」（那六个模块各自只收一个概念）；
+这三块是**本项目自己的重复**收敛出来的 —— 共同点是：同一条协议曾经在多个功能里各写一遍，
+于是协议只存在于副本里。功能之间只允许经它们打交道，不要各写一份。
+
+| 模块 | 收敛掉什么 | 规矩 |
+| --- | --- | --- |
+| `lib/toggle.ts` | 七个开关各自手写的「默认值 → 首帧渲染 → `registerSetting` → 异步存储覆盖 → 写盘 → 广播」 | 新增开关只写 `createToggle({ …, apply })`，**不要**再手写 `registerSetting` + `readFlag`；存储 key 默认等于开关 id |
+| `lib/gate.ts` | 「宽列是否生效」的三份判据（属性比较 / 属性 + 实测宽度 / 回调传入），以及 `'teSidebar'`、`'off'` 这类字面量副本 | 功能之间只传布尔值（`isWideTimeline()` / `setWideTimeline()` / `isSidebarHidden()` / `setSidebarHidden()`）；属性名与取值词表是它的私有实现 |
+| `lib/frame-work.ts` | 各处手写的「批次回调只收集、工作合并到下一帧」队列，以及没有 rAF 时的 setTimeout 回退 | 功能用 `createFrameQueue()`；DOM 批次 / 观察器回调里**不做**测量（`getComputedStyle` / `offsetWidth` 同样是测量），只排队 |
+
+它们的收益是 locality：异步 hydrate 的竞态、门控词表、帧合并与后台回退各只有一个 owner。
+反过来说，任何「再写一遍」都会把已经修掉的缺陷重新种回去。
+
 ## 不变量
 
+- **跨功能的门控事实只经 `lib/gate.ts`**：`html[data-te-timeline]` / `html[data-te-sidebar]`
+  的名字与取值（`'wide'` / `'on'` / `'off'`）是它的私有实现，功能里出现这些字面量即为违规。
+  CSS、DevTools 与验证脚本照旧按属性工作 —— 变的只是「功能之间的 API」。
 - **单一布局门控点**：`html[data-te-timeline='wide']` 一个属性同时决定三件事是否生效 ——
   CSS 宽度覆盖（`src/features/timeline-width.css`）、媒体高度钳制（`src/features/media-cap.ts` 的 `isActive()`）、
   宽度解锁器（`src/lib/unlock-width.ts` 的 `isActive()`）。所以「宽列不适用」的判定**只允许写在一处**

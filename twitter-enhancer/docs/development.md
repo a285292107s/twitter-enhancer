@@ -23,19 +23,27 @@
    | 观察具体节点（属性变化 / ResizeObserver） | `lib/observer-scope.ts` 的 `createObserverScope()` |
    | 知道时间线出现 / 被整层替换（标签页切换） | `lib/timeline.ts` 的 `onTimelineChanged()` |
    | 要一个 X 的选择器 | `lib/selectors.ts` 登记后引用，**不要**在功能里写字面量 |
+   | 加一个可持久化的开关 | `lib/toggle.ts` 的 `createToggle()`（面板行 / 存储 / 首帧渲染 / 广播一起包掉） |
+   | 读另一个功能的门控状态（宽列是否生效、右栏是否被隐藏） | `lib/gate.ts`；**不要**自己读写 `html[data-te-*]` 字面量 |
+   | 把一批 DOM 变更引起的测量 / 写样式推迟到下一帧 | `lib/frame-work.ts` 的 `createFrameQueue()`（同帧合并 + 无 rAF 时的回退） |
    | 取值来自 CONFIG 的 CSS 规则 | `lib/style-sheet.ts` 的 `createStyleSheet()`（判据见 architecture.md「样式放在哪」） |
-2. 可调数值加进 `src/config.ts`（**不要**散落在功能文件里写魔数）。
+2. 可调数值加进 `src/config.ts`（**不要**散落在功能文件里写魔数 —— 门槛值也算，
+   例如「主列宽到多少才算宽列真的生效」在 `CONFIG.media.minActiveColumnWidth`）。
 3. 在 `src/features/index.ts` 登记。`settings-panel` 必须排最后 —— 各功能先把开关登记进
    设置注册表，面板首帧渲染才是完整列表。
-4. 开关走 `src/lib/settings.ts` 的 `registerSetting()`（自动出现在页内设置面板），
-   持久化走 `src/lib/store.ts` 的 `readFlag` / `writeFlag`（GM + localStorage 双写，key 前缀
-   `twitter-enhancer:`，读取时 GM 优先）。toggle 后调 `notifySettingsChanged()`，
-   面板据此同步 `aria-checked`。
-5. 在 `scripts/verify.mjs` 补断言。**面板开关的计数与顺序是硬断言**：实例五里的
-   `'五个功能共登记七个开关'` 与 `'开关顺序为 布局三项 + 内容四项'`（`data-te-setting` 顺序列表）
-   每加一个开关都要同步改；新开关还要断言「在面板里点它真的改变状态」。
-   排版类功能另要满足实例三十六的「不搬节点」契约（拓扑签名 + 元素数量在跑脚本前后一致），
-   该实例带反向对照，若功能没生效会报失败而不是静默通过。
+4. 开关走 `src/lib/toggle.ts` 的 `createToggle()`：它把「默认值 → 首帧渲染 → 面板登记 →
+   异步读取存储覆盖 → 写盘 → 广播面板刷新」包成一条协议，功能只提供一个 `apply(值)`。
+   存储仍走 `src/lib/store.ts`（GM + localStorage 双写，key 前缀 `twitter-enhancer:`，
+   key 默认等于开关 id）。**不要**再手写 `registerSetting` + `readFlag` 那一套 ——
+   七个开关各抄一遍时，「协议」只存在于七份副本里（见 lib/toggle.ts 文件头）。
+5. 在 `scripts/verify.mjs` 补断言。夹具在 `scripts/harness.mjs`（jsdom 布局补偿的桩、实测几何、
+   会话辅助、结果收集与输出），场景按 `// ===== 段落名 =====` 分段 —— 不再用「实例N」编号：
+   编号会随插入重排，名字才是稳定地址。
+   新开关要做两件事：加进 `EXPECTED_SETTINGS`（那是**词汇表回归锁**，只在设置项集合真的变了时
+   才动），以及别的都不用做 —— 「面板的每一行都由设置注册表推导」与「每一行都能翻转并复位」
+   两条属性断言会自动覆盖它（注册表经 `__twitterEnhancer.settings()` 读出来，门禁不抄第二份清单）。
+   排版类功能另要满足「不搬节点」契约（拓扑签名 + 元素数量在跑脚本前后一致），
+   该段带反向对照，若功能没生效会报失败而不是静默通过。
    注意它的射程：只对「改变推文内部拓扑」的改法有牙齿（那种改法必然让签名变化）；
    若新排版只在特定条件下才动节点，要把它自己的条件复现进这个夹具。
 6. 改完跑 `npm run verify`；涉及真实布局几何的改动再跑 `npm run e2e:real`。
@@ -45,10 +53,22 @@
 jsdom 回归跑的是打包后的 IIFE，没有模块导出 —— 纯逻辑（页面类型分类的十几条分支、
 `waitFor` 的 `stopIf` 语义）只能靠 DOM 副作用间接观察，分支覆盖不到。因此 `main.ts` 把一组
 **只读纯函数**挂在 `window.__twitterEnhancer` 上（`classifyPath` / `currentPageKind` /
-`isTimelinePage` / `getTimelineRoot` / `waitFor` / `waitForElement`），门禁直接断言它们。
+`isTimelinePage` / `getTimelineRoot` / `settings`（开关 id + 分组）/ `waitFor` /
+`waitForElement`），门禁直接断言它们。
+
+`settings` 是给「面板是设置注册表的纯函数」那条属性断言用的：没有它，门禁只能自己抄一份
+开关清单，那份副本会随每次新增开关过期 —— 于是「面板漏渲染了某个开关」反而测不出来。
 
 新增字段前先读这条约束：**只能挂无副作用的查询函数，绝不挂开关或写入口** ——
 脚本的行为入口只有「页内设置面板 + 快捷键」两条，不能因为这个出口多出第三条。
+
+## 夹具的已知边界
+
+`scripts/verify.mjs` 的场景之间**有顺序耦合**：末尾几段读的是前面建出来的 window
+（「按 CONFIG 拼装的样式表」那段读第一个窗口），另有若干共享的 HTML 夹具与辅助函数
+（`inject` / `installFakeResizeObserver` / `structureSignature`）。所以它还不能按场景单独运行，
+也不能把它们拆成互不依赖的文件 —— 拆之前要先解开这些耦合（把共享夹具提到夹具模块、
+让每段自己建窗口），那是一件独立的事，不是顺手能做的重构。
 
 ## 迭代与分发
 

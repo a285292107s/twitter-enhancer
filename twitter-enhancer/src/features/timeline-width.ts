@@ -39,8 +39,10 @@
  * 单一门控点：`html[data-te-timeline='wide']` 同时决定三件事是否生效 ——
  * CSS 宽度覆盖（timeline-width.css）、媒体高度钳制（media-cap 的 isActive）、
  * 宽度解锁器（unlock-width 的 isActive）。因此「宽列不适用」的判定只需要
- * 收敛到一处（开关关闭 / 视口过窄 / X 没渲染三栏，如 /i/grok、/i/chat），
+ * 收敛到一处（开关关闭 / 视口过窄 / X 没渲染三栏，如 /i/grok、 /i/chat），
  * 不必在 CSS 与各模块里重复排除条件。
+ * JS 侧读写这个属性只允许走 `lib/gate.ts` 的 `isWideTimeline()` / `setWideTimeline()` ——
+ * 属性名与取值 `'wide'` 是它的私有实现，功能之间只传布尔值。
  *
  * 监听策略（性能版）：
  * - 不再自建轮询定时器 / 全站 MutationObserver。主列 / 右栏的出现与消失走
@@ -49,8 +51,9 @@
  * - 自身调整完布局也会广播 `te:layout`，供右栏锚定逻辑（sidebar）跟随。
  */
 import { CONFIG } from '../config';
-import { registerSetting, notifySettingsChanged } from '../lib/settings';
-import { readFlag, writeFlag } from '../lib/store';
+import { createToggle } from '../lib/toggle';
+import { createFrameQueue } from '../lib/frame-work';
+import { isSidebarHidden, isWideTimeline, setWideTimeline } from '../lib/gate';
 import { createWidthUnlocker } from '../lib/unlock-width';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
@@ -66,15 +69,8 @@ const SIDEBAR_COLUMN = SEL.sidebarColumn;
 const MIN_WIDTH = 600;
 /** 视口右侧安全边距 */
 const EDGE = 16;
-/** 右栏左缘与主列右缘的间距（X 原生 30，与 sidebar 功能的锚定间距一致） */
-const SIDEBAR_GAP = 30;
-/** X 的窄屏断点：低于该值保持 X 原生布局 */
-const BREAKPOINT = 1095;
 /** 宽度兜底判据的容差（px）：吸收 getBoundingClientRect 的小数误差 */
 const WIDTH_GUARD_TOLERANCE = 1;
-/** 隐藏右栏的门控属性（sidebar 功能写入，与 sidebar.css 隐藏右栏用的是同一个） */
-const SIDEBAR_ATTR = 'teSidebar';
-const SIDEBAR_HIDDEN = 'off';
 /**
  * X Chat（私信）全屏路由 —— 唯一已确认的非时间线主列页面。
  *
@@ -98,6 +94,12 @@ function isChatRoute(): boolean {
   return currentPageKind() === 'messages';
 }
 
+/**
+ * 宽列开关的当前值 —— 与 `createToggle` 同步的一份镜像。
+ *
+ * 为什么不处处读 toggle 句柄：`writeTimelineLayout()` 会在**构造 toggle 的那一次
+ * `apply` 里**就被调用，那一刻句柄还没赋值（`const` 的 TDZ），读它会直接抛错。
+ */
 let wide = CONFIG.timelineWide;
 /** 上次实际写入的几何（用于判定是否真的变化，避免无意义地反复广播 te:layout） */
 let lastEnabled: boolean | null = null;
@@ -145,7 +147,7 @@ function disableTimelineLayout(row: HTMLElement | null): void {
   lastTarget = 0;
   lastMinWidth = '';
   lastEnabled = false;
-  document.documentElement.dataset.teTimeline = 'off';
+  setWideTimeline(false);
   dispatchLayoutEvent();
 }
 
@@ -181,13 +183,9 @@ function hasRowSidebar(): boolean {
 /**
  * 右栏是否已被本脚本隐藏。
  *
- * 以 sidebar 功能的门控属性为准（`html[data-te-sidebar='off']`，与 sidebar.css 里
- * 隐藏右栏的规则同一判据）：属性缺失即右栏可见 —— sidebar 功能整体关闭时也不会误判。
+ * 判据是门控模块发布的那份事实（`html[data-te-sidebar]`，与 sidebar.css 里隐藏右栏的规则
+ * 同一个属性）：属性缺失即右栏可见 —— sidebar 功能整体关闭时也不会误判。
  */
-function sidebarHiddenByUs(): boolean {
-  return document.documentElement.dataset[SIDEBAR_ATTR] === SIDEBAR_HIDDEN;
-}
-
 /**
  * 右栏右缘之外 X 保留的右边距（右栏自带的 margin-right，display:none 时计算值仍在）。
  * 它是内容区右边界的一部分：/i/grok 把同一个值做成了三栏行的 padding-right。
@@ -200,7 +198,7 @@ function sidebarReservedMargin(sidebar: HTMLElement): number {
 function sidebarVisibleOuter(sidebar: HTMLElement): number {
   // display:none 时 getClientRects 为空，比读 computed display 更可靠
   if (sidebar.getClientRects().length === 0) return 0;
-  return sidebar.getBoundingClientRect().width + sidebarReservedMargin(sidebar) + SIDEBAR_GAP;
+  return sidebar.getBoundingClientRect().width + sidebarReservedMargin(sidebar) + CONFIG.sidebar.gap;
 }
 
 /**
@@ -252,7 +250,7 @@ function writeTimelineLayout(): void {
   // 行容器被 React 替换（旧引用不在新行上）：清掉旧节点的残留样式
   if (lastRow && lastRow !== row) clearRowStyle(lastRow);
 
-  const hidden = sidebarHiddenByUs();
+  const hidden = isSidebarHidden();
   const target = timelineTarget(row, sidebar, hidden);
   if (target <= 0) return;
 
@@ -263,7 +261,7 @@ function writeTimelineLayout(): void {
   // SPA 导航时上一页的 'wide' 还在，新主列一挂载就被 CSS 写成目标宽 —— 那一刻读到的
   // 是脚本自己的输出，拿它当「原生列宽」会把解锁器判据挪到目标宽一带（实测 2026-09-14：
   // 导航后时间线内容退回 600px，且一直坏到刷新）。见 architecture.md 的「禁止自反馈」。
-  if (root.dataset.teTimeline !== 'wide' && primaryWidth > 0) {
+  if (!isWideTimeline() && primaryWidth > 0) {
     nativeColumnWidth = primaryWidth;
   }
   if (!widenedByUs.has(primary) && primaryWidth > target + WIDTH_GUARD_TOLERANCE) {
@@ -274,11 +272,11 @@ function writeTimelineLayout(): void {
   // 视口过窄 / 开关关闭 → 交回 X 原生，与「不适用的页面」走同一条路径：
   // 撤掉 data-te-timeline 即可让 CSS 宽度覆盖、媒体高度钳制、宽度解锁器
   // （三者都挂在这个属性上）一并失效，不需要在 CSS 里逐条加 :not() 排除。
-  if (!wide || window.innerWidth < BREAKPOINT) {
+  if (!wide || window.innerWidth < CONFIG.timelineBreakpoint) {
     disableTimelineLayout(row);
     return;
   }
-  root.dataset.teTimeline = 'wide';
+  setWideTimeline(true);
 
   // 行补偿样式只有「右栏显示」时才需要：把右栏钉在主列右侧 30px（见 sidebar.applyAnchor），
   // 所以要撑开行让「主列 + 右栏」放得下（父容器 overflow:visible，不会裁剪）。
@@ -326,13 +324,6 @@ function applyTimelineLayout(): void {
   unlocker?.sync();
 }
 
-function toggleWide(): void {
-  wide = !wide;
-  applyTimelineLayout();
-  void writeFlag('timeline-wide', wide);
-  notifySettingsChanged();
-}
-
 export function enableTimelineWidth(): void {
   // 宽度解锁器与宽时间线共用同一个门控（html[data-te-timeline='wide']）：
   // 解锁器只负责给「被写死宽度的容器」打标记，真正放开宽度的 CSS 挂在该属性下。
@@ -343,29 +334,31 @@ export function enableTimelineWidth(): void {
     lockedRange: CONFIG.lockedWidthRange,
     // 主判据 = 原生列宽 ± 半宽（宽列生效前读到的那次），读不到时退回 CONFIG 区间
     nativeWidth: () => nativeColumnWidth,
-    isActive: () => document.documentElement.dataset.teTimeline === 'wide',
+    isActive: isWideTimeline,
   });
   unlocker.start();
 
   // 主列是 React 渲染的，可能晚于脚本注入：订阅共享观察器，出现 / 结构变化时重算。
   // 回调本身很廉价（几次 querySelector + getBoundingClientRect），120ms 节流足够。
-  let layoutScheduled = false;
+  // 布局重算合并到下一帧：主列 / 右栏 / 窗口尺寸 / te:layout 可能在同一次导航里连着报好几次。
+  // 队列见 lib/frame-work.ts（同帧合并 + 没有 rAF 时退回 setTimeout）。
+  const layoutQueue = createFrameQueue('timeline-width');
   const scheduleLayout = (): void => {
-    if (layoutScheduled) return;
-    layoutScheduled = true;
-    requestAnimationFrame(() => {
-      layoutScheduled = false;
-      applyTimelineLayout();
-    });
+    layoutQueue.schedule('layout', applyTimelineLayout);
   };
 
-  applyTimelineLayout();
-  // 存储读取是异步的，先用默认值渲染，读到用户设置后再覆盖
-  void readFlag('timeline-wide').then((stored) => {
-    if (stored !== null && stored !== wide) {
-      wide = stored;
+  // 开关：默认值 / 存储读取 / 写盘 / 面板登记与刷新全部交给 createToggle（见 lib/toggle.ts）。
+  // 构造时的第一次 apply 就是收尾的 applyTimelineLayout()，所以它必须排在解锁器就位之后。
+  createToggle({
+    id: 'timeline-wide',
+    group: '布局',
+    label: '宽时间线',
+    description: '主列铺满 X 内容区；右栏显示时最多放宽到 800px',
+    default: CONFIG.timelineWide,
+    apply: (value) => {
+      wide = value;
       applyTimelineLayout();
-    }
+    },
   });
 
   if (document.readyState === 'loading') {
@@ -408,15 +401,6 @@ export function enableTimelineWidth(): void {
     if (!relevant) return;
     if (structural) applyTimelineLayout();
     else scheduleLayout();
-  });
-
-  registerSetting({
-    id: 'timeline-wide',
-    group: '布局',
-    label: '宽时间线',
-    description: '主列铺满 X 内容区；右栏显示时最多放宽到 800px',
-    isEnabled: () => wide,
-    toggle: toggleWide,
   });
 }
 

@@ -24,6 +24,7 @@
  * 真正放开宽度的 CSS 挂在宽时间线开关下（timeline-width.css）；本模块只打标记。
  */
 import { onDomChanged } from './dom-watch';
+import { createFrameQueue } from './frame-work';
 import { isScriptSized } from './script-sized';
 import { SEL } from './selectors';
 
@@ -104,22 +105,10 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
   let stopped = true;
   /** 上次同步到的激活状态（用于识别「关 → 开」跃迁，需要整树补扫） */
   let active = true;
-  /** 待处理的内容单元（rAF 帧任务里统一测量） */
+  /** 待处理的内容单元（帧任务里统一测量） */
   let pendingUnits: Set<Element> | null = null;
-  let frameQueued = false;
-
-  const FALLBACK_FRAME_MS = 16;
-
-  function queueFrameWork(): void {
-    if (frameQueued || stopped) return;
-    frameQueued = true;
-    const run = (): void => {
-      frameQueued = false;
-      runFrameWork();
-    };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-    else setTimeout(run, FALLBACK_FRAME_MS);
-  }
+  /** 帧任务队列：DOM 批次回调只收集单元，测量放到下一个渲染帧（见 lib/frame-work.ts） */
+  const frameQueue = createFrameQueue('unlock-width');
 
   /** 清除所有已打标记，使后续可重新计算 */
   function reset(): void {
@@ -267,7 +256,7 @@ export function createWidthUnlocker(containerSelector: string, options: UnlockOp
           if (!container.contains(node)) continue;
           collectUnits(node);
         }
-        if (pendingUnits) queueFrameWork();
+        if (pendingUnits) frameQueue.schedule('units', runFrameWork);
       });
       resizeHandler = () => {
         // 窗口尺寸变化可能让整条宽链失效：清标记并整树补扫

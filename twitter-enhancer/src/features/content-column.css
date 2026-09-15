@@ -14,13 +14,9 @@
  *    不改任何元素的 layout 高度或宽度（媒体等比模式在 media-cap 里，见该文件）。
  */
 
-/* 版心默认值：16px Chirp 下 72ch 的实测解析值（2026-09-14 真机 763.776px，取整）。
-   content-column.ts 会用真实正文元素的解析结果覆盖它 —— 之所以要有默认值：
-   自定义属性在首屏推文出现之前拿不到正文样本，而 CSS 侧的 72ch 兜底会按操作栏
-   自己的字号（15px = 633px）解析，出现一段「操作栏只有 633px 宽」的中间态。 */
-:root {
-  --te-spine: 764px;
-}
+/* 版心默认值（`--te-spine`）由令牌层提供：见 tweet-ui.css 的 :root 与 tweet-ui.ts 的 publishSpine。
+   ch 相对元素自身字号解析，所以定义 measure 的那一层会测量并发布一个 px 版心，
+   这里只消费 —— 本模块不碰 computed style，也不去问另一个功能的开关状态。 */
 
 /* --- 版心：阅读流收进 --te-spine；昵称行与媒体保持整列宽 ---
    列宽 600 → 980 后，若让正文、元信息、操作栏一起摊到 946px，页面只会「被拉长」。
@@ -32,8 +28,8 @@
    「承载内容单元的容器」判定，操作栏不在其列（见 lib/unlock-width.ts 的 CONTENT_UNIT）。 */
 html[data-te-column='on'] article[data-testid='tweet'] [role='group'] {
   max-width: var(--te-spine, var(--te-measure));
-  /* --te-spine 是 JS 从真实正文元素读到的 px 版心（ch 相对元素自身字号，
-  操作栏继承 15px 时 72ch 只有 633px，会与正文的 764px 对不齐）。
+  /* --te-spine 是令牌层发布的 px 版心（ch 相对元素自身字号，操作栏继承 15px 时
+    72ch 只有 633px，会与正文的 764px 对不齐）。
      X 的操作按钮是 flex:1 1 0% 的等距分布（实测 detail 页 5 个、时间线 6 个），
      这是它的设计语言，保留；版心只负责把这条轴从 946px 收到 764px。
      gap 参与分布计算，所以它不是装饰值 —— 去掉后图标会贴得更开。 */

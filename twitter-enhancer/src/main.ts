@@ -3,6 +3,7 @@ import { startRouteWatch } from './lib/spa-route';
 import { startPageWatch, classifyPath, currentPageKind, isTimelinePage } from './lib/page';
 import { startTimelineWatch, getTimelineRoot } from './lib/timeline';
 import { waitFor, waitForElement } from './lib/wait-for';
+import { getSettings } from './lib/settings';
 import { features } from './features';
 
 /**
@@ -11,6 +12,11 @@ import { features } from './features';
  * 为什么要有这个全局：jsdom 回归（`scripts/verify.mjs`）跑的是打包后的 IIFE，没有模块导出，
  * 于是**纯逻辑**（页面类型分类的十几条分支、等待器的 stopIf 语义）只能靠 DOM 副作用间接
  * 观察 —— 分支根本覆盖不到。这里把只读的纯函数挂出来，让门禁能直接断言它们。
+ *
+ * `settings` 是同一类东西：门禁要断言「设置面板的每一行 ↔ 设置注册表」一一对应，
+ * 若没有这个出口，它就只能自己抄一份开关清单 —— 那份副本会随每次新增开关而过期，
+ * 于是「面板漏渲染了某个开关」这类缺陷反而测不出来。这里给 id 与分组，
+ * 够门禁自己推出「面板应当长什么样」（面板按分组重排，见 features/settings-panel.ts）。
  *
  * 约束（新增字段前先读这条）：只挂**无副作用**的查询函数，绝不挂开关 / 写入口 ——
  * 脚本的行为入口只有「页内设置面板 + 快捷键」两条，不能因为这个出口多出第三条。
@@ -24,6 +30,8 @@ function exposeDebugSurface(): void {
         currentPageKind,
         isTimelinePage,
         getTimelineRoot,
+        settings: (): { id: string; group: string }[] =>
+          getSettings().map(({ id, group }) => ({ id, group })),
         waitFor,
         waitForElement,
       }),

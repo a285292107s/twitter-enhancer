@@ -34,8 +34,9 @@
  *   visibilitychange / dom-watch overflow）仍走 120ms 去抖的全量对账。
  */
 import { CONFIG } from '../config';
-import { registerSetting, notifySettingsChanged } from '../lib/settings';
-import { readFlag, writeFlag } from '../lib/store';
+import { createToggle } from '../lib/toggle';
+import { createFrameQueue } from '../lib/frame-work';
+import { isWideTimeline } from '../lib/gate';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
 import { markScriptSized, unmarkScriptSized } from '../lib/script-sized';
@@ -59,10 +60,10 @@ const RECONCILE_DEBOUNCE = 120;
 /** 钳制后内容底部允许超出宿主的容差（px）：超出说明内容没跟着重排 */
 const CROP_TOLERANCE = 4;
 
+/** 媒体钳制开关的当前值 —— 与 createToggle 同步的镜像（理由见 timeline-width.ts 同类注释） */
 let locked = CONFIG.media.cap;
-/** fit 模式：超预算单图等比缩宽度（true）还是只压宿主高度（false，旧行为） */
+/** fit 模式：超预算单图等比缩宽度（true）还是只压宿主高度（false，旧行为）—— 同上，createToggle 的镜像 */
 let fitEnabled = CONFIG.media.fit;
-
 /**
  * 脚本改写过的元素 → **被改写属性的原值**（解锁时只把这些属性写回）。
  *
@@ -99,11 +100,17 @@ function restoreInline(el: HTMLElement): void {
   if (el.getAttribute('style') === '') el.removeAttribute('style');
 }
 
-/** 布局是否处于「需要钳制」的状态：宽时间线开启，且主列真的被放宽（>640px） */
+/**
+ * 布局是否处于「需要钳制」的状态：宽时间线开启，且主列真的被放宽了。
+ *
+ * 两个条件各管一件事（见 lib/gate.ts 与 CONFIG.media.minActiveColumnWidth）：
+ * 门控属性是开关的**意图**，实测宽度是它**真的生效了** ——
+ * SPA 导航的一瞬间新主列还没被 CSS 写成目标宽，那时按原生列宽算自然高度会钳错。
+ */
 function isActive(): boolean {
-  if (document.documentElement.dataset.teTimeline !== 'wide') return false;
+  if (!isWideTimeline()) return false;
   const primary = document.querySelector<HTMLElement>(SEL.primaryColumn);
-  return !!primary && primary.clientWidth > 640;
+  return !!primary && primary.clientWidth > CONFIG.media.minActiveColumnWidth;
 }
 
 /**
@@ -141,13 +148,13 @@ function scheduleReconcile(): void {
  * dom-watch 的冲刷回调运行在滚动路径上（每 120ms 一批）。任何同步的子树
  * 扫描 / offsetWidth 布局读都会抢主线程并强制 layout，是滚动掉帧的来源。
  * 因此订阅回调只做一件廉价的事：把「这一行的媒体可能要重排」的种子塞进
- * `pendingSeeds`；真正的工作推迟到下一个 rAF 帧统一执行（后台标签页 rAF
- * 被冻结时退回 setTimeout），每帧至多跑一次 —— 帧内多次几何读只触发一次
- * layout，其余命中浏览器布局缓存。
+ * `pendingSeeds`；真正的测量与钳制推迟到下一个渲染帧统一执行 ——
+ * 每帧至多跑一次，帧内多次几何读只触发一次 layout，其余命中浏览器布局缓存。
+ * 队列本身（同帧合并 / 无 rAF 时退回 setTimeout）由 lib/frame-work.ts 提供。
  * ------------------------------------------------------------------ */
-const FALLBACK_FRAME_MS = 16;
 
-let frameQueued = false;
+/** 帧任务队列（见 lib/frame-work.ts） */
+const frameQueue = createFrameQueue('media-cap');
 /** 待重排的种子：媒体元素，或已经是宿主的元素（见 runFrameWork） */
 const pendingSeeds = new Set<Element>();
 
@@ -155,18 +162,7 @@ const pendingSeeds = new Set<Element>();
 function queueSeed(el: Element): void {
   if (!el.isConnected) return;
   pendingSeeds.add(el);
-  queueFrameWork();
-}
-
-function queueFrameWork(): void {
-  if (frameQueued) return;
-  frameQueued = true;
-  const run = (): void => {
-    frameQueued = false;
-    runFrameWork();
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-  else setTimeout(run, FALLBACK_FRAME_MS);
+  frameQueue.schedule('seeds', runFrameWork);
 }
 
 /**
@@ -180,7 +176,6 @@ function queueFrameWork(): void {
  * 任何种子都会先解锁它所在的那条链再重新钳制，语义只剩一种。
  */
 function runFrameWork(): void {
-  frameQueued = false;
   if (!locked || !isActive()) return;
   const seeds = [...pendingSeeds];
   pendingSeeds.clear();
@@ -594,7 +589,7 @@ function collectSeeds(nodes: Element[]): void {
       if (media.isConnected) pendingSeeds.add(media);
     }
   }
-  if (pendingSeeds.size > 0) queueFrameWork();
+  if (pendingSeeds.size > 0) frameQueue.schedule('seeds', runFrameWork);
 }
 
 /** 撤销所有钳制（功能关闭 / 布局回原生时还原 X 原生观感） */
@@ -608,35 +603,33 @@ function resetMediaCap(): void {
   }
 }
 
-function toggleCap(): void {
-  locked = !locked;
-  reconcileMediaCap();
-  void writeFlag('media-cap', locked);
-  notifySettingsChanged();
-}
-
-function toggleFit(): void {
-  fitEnabled = !fitEnabled;
-  // 先整体还原再按新模式重钳：fit 改的是图片内联尺寸，必须走一次 unlock
-  reconcileMediaCap();
-  void writeFlag('media-fit', fitEnabled);
-  notifySettingsChanged();
-}
-
 export function enableMediaCap(): void {
-  reconcileMediaCap();
-  // 存储读取是异步的，先用默认值渲染，读到用户设置后再覆盖
-  void readFlag('media-cap').then((stored) => {
-    if (stored !== null && stored !== locked) {
-      locked = stored;
+  // 两个开关：默认值 / 存储读取 / 写盘 / 面板登记与刷新全部交给 createToggle（见 lib/toggle.ts）。
+  // 构造时的第一次 apply 就是首屏对账（旧实现里那句独立的 reconcileMediaCap()），
+  // 所以这两行必须排在下面那些事件订阅之前 —— 首帧要有正确的媒体高度，不能等异步存储。
+  // 注册顺序（media-cap → media-fit）就是面板里的行序，不要调换。
+  createToggle({
+    id: 'media-cap',
+    group: '内容',
+    label: '媒体高度钳制',
+    description: `超高竖图 / 轮播压到 ${CONFIG.media.maxHeight}px 内，一屏看全`,
+    default: CONFIG.media.cap,
+    apply: (value) => {
+      locked = value;
       reconcileMediaCap();
-    }
+    },
   });
-  void readFlag('media-fit').then((stored) => {
-    if (stored !== null && stored !== fitEnabled) {
-      fitEnabled = stored;
+  createToggle({
+    id: 'media-fit',
+    group: '内容',
+    label: '单图等比',
+    description: '超预算的单图按比例缩到预算内并居中，不裁切、不压扁（关：只压高度）',
+    default: CONFIG.media.fit,
+    apply: (value) => {
+      // fit 改的是图片内联尺寸，必须走一次整体还原再按新模式重钳
+      fitEnabled = value;
       reconcileMediaCap();
-    }
+    },
   });
 
   if (document.readyState === 'loading') {
@@ -686,24 +679,6 @@ export function enableMediaCap(): void {
   // 后台标签页定时器被冻结：回到前台时主动补一次对账
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && locked) scheduleReconcile();
-  });
-
-  registerSetting({
-    id: 'media-cap',
-    group: '内容',
-    label: '媒体高度钳制',
-    description: `超高竖图 / 轮播压到 ${CONFIG.media.maxHeight}px 内，一屏看全`,
-    isEnabled: () => locked,
-    toggle: toggleCap,
-  });
-
-  registerSetting({
-    id: 'media-fit',
-    group: '内容',
-    label: '单图等比',
-    description: '超预算的单图按比例缩到预算内并居中，不裁切、不压扁（关：只压高度）',
-    isEnabled: () => fitEnabled,
-    toggle: toggleFit,
   });
 }
 

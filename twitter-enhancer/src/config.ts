@@ -10,6 +10,11 @@ export const CONFIG: {
   /** 是否默认开启「宽时间线」（开启后主列铺满内容区 / 右栏显示时放宽到上限） */
   timelineWide: boolean;
   /**
+   * X 自己的窄屏断点（px）：低于该值保持 X 原生布局。
+   * 这是 X 的断点而不是我们的取舍，X 改版后要重新实测（见 docs/design-notes.md）。
+   */
+  timelineBreakpoint: number;
+  /**
    * 宽度解锁器的**兜底**锁宽区间（px）。
    *
    * 主判据不是这个区间，而是「X 原生列宽 ± 半宽（= (max-min)/2）」——原生列宽由
@@ -38,6 +43,14 @@ export const CONFIG: {
      * 覆盖它只会让 /home 与 /i/grok 的导航条走两套机制（2026-09-08 真机复核）。
      */
     anchorSidebar: boolean;
+    /**
+     * 主列右缘与右栏左缘的间距（px）—— X 原生 30。
+     * 两处消费它：sidebar 把右栏钉在主列右侧（margin-left），宽时间线算行的 min-width
+     * （`目标宽 + 右栏可见外宽`）。同一个事实写两份必然漂，所以它是配置项。
+     */
+    gap: number;
+    /** 左栏内栏宽度低于该值（px）视为「图标条」：放不下输入框，隐藏搜索框 */
+    compactWidth: number;
   };
   /** 媒体高度钳制（详见 features/media-cap.ts）：宽列下超高竖图/轮播行不超出一屏 */
   media: {
@@ -70,6 +83,15 @@ export const CONFIG: {
     chromeAllowance: number;
     /** 预算下限（px）：视口极矮时仍保证媒体可见 */
     minHeight: number;
+    /**
+     * 「宽列真的生效了」的宽度下限（px）：主列实测宽于该值才钳制。
+     *
+     * 为什么门控属性之外还要一条宽度条件：`html[data-te-timeline='wide']` 是开关的**意图**，
+     * 而 SPA 导航的一瞬间新主列可能还没被我们的 CSS 写成目标宽 —— 那时按预算钳制会
+     * 拿原生列宽算出一个错误的自然高度。它是判据的一部分，所以与其它门槛一样登记在这里，
+     * 不要留在功能文件里当魔数。
+     */
+    minActiveColumnWidth: number;
   };
   /**
    * 内容列排版（详见 features/content-column.ts 与 docs/content-column-design.md）。
@@ -127,6 +149,7 @@ export const CONFIG: {
 } = {
   timelineWidth: 800,
   timelineWide: true,
+  timelineBreakpoint: 1095,
   lockedWidthRange: [560, 660],
   tweetUi: {
     enabledByDefault: true,
@@ -137,6 +160,8 @@ export const CONFIG: {
   sidebar: {
     hiddenByDefault: true,
     anchorSidebar: true,
+    gap: 30,
+    compactWidth: 240,
   },
   media: {
     cap: true,
@@ -145,6 +170,7 @@ export const CONFIG: {
     maxHeight: 700,
     chromeAllowance: 320,
     minHeight: 320,
+    minActiveColumnWidth: 640,
   },
   column: {
     enabledByDefault: true,

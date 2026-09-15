@@ -1,6 +1,13 @@
 /**
  * 用 jsdom 回归验证脚本运行时行为（无需打开 x.com）。
  *
+ * 运行：node scripts/verify.mjs（或 npm run verify）
+ *
+ * 本文件只放**断言场景**；共用的基础设施（jsdom 布局补偿的桩、实测几何、会话辅助、
+ * 结果收集与输出）在 `scripts/harness.mjs`。场景按主题成段，用
+ * `// ===== 段落名 =====` 分隔 —— 不再用「实例N」编号：编号会随插入而重排，
+ * 读者无法按号定位，名字可以。
+ *
  * 覆盖：
  * 1. 宽度解锁器 unlock-width：按计算值识别并解除被写死的 600px 容器
  *    （媒体轮播 ScrollSnap-List 子树除外：格宽是媒体比例，可能正好落在锁宽区间里）；
@@ -8,168 +15,31 @@
  * 3. 侧栏与搜索 sidebar：右栏隐藏、搜索宿主挂载、Alt+B 双向切换；
  * 4. 宽时间线 timeline-width：右栏隐藏时主列铺满 X 内容区（与 /i/grok 一致、左缘不动），
  *    右栏显示时 800 封顶；X 没渲染三栏的页面（/i/grok 单栏、/i/chat 双栏）交回原生；
- * 5. 页内设置面板 settings-panel：右下角设置按钮（Grok 按钮上方）、弹窗、开关生效。
+ * 5. 页内设置面板 settings-panel：右下角设置按钮（Grok 按钮上方）、弹窗、开关生效；
  * 6. 页面类型检测 lib/page：分类纯函数、html[data-te-page]、te:page 事件；
  * 7. 等条件 lib/wait-for：stopIf 提前放弃 / 命中返回元素 / 超时放弃；
  * 8. 时间线包装层 lib/timeline：占位层不算时间线、真实层替换、标签页整层替换、旧结构兜底；
  * 9. 按 CONFIG 拼装的样式表 lib/style-sheet：设置按钮几何与 config.ts 同源；
  * 10. 命名观察器作用域 lib/observer-scope：节点被替换时同名重登记、旧观察器断开。
  *
- * 运行：node scripts/verify.mjs（或 npm run verify）
+ * 注意场景之间有顺序耦合：末尾几段读的是前面建出来的 window（样式表那段读第一个窗口），
+ * 因此不能重排、也还不能只跑其中一段（拆分的前提见 docs/development.md）。
  */
-import { readFileSync } from 'node:fs';
-import { JSDOM, VirtualConsole } from 'jsdom';
+import {
+  budgetOf,
+  createWindow,
+  expect,
+  HTML,
+  openSettings,
+  press,
+  report,
+  script,
+  settingState,
+  sleep,
+  toggleSetting,
+} from './harness.mjs';
 
-const script = readFileSync(new URL('../dist/twitter-enhancer.user.js', import.meta.url), 'utf8');
-
-const HTML = `<!doctype html><html><head></head><body>
-  <nav aria-label="Primary">
-    <a href="/home" aria-label="X">logo</a>
-    <a href="/home">主页</a>
-    <a href="/explore">探索</a>
-  </nav>
-  <div id="row" style="display:flex">
-    <div data-testid="primaryColumn" style="width:800px">
-      <div style="width:100%">
-        <div id="timeline" style="max-width:600px">
-          <div data-testid="cellInnerDiv">
-            <div id="tweet" style="width:600px">tweet body</div>
-          </div>
-          <div id="avatar" style="width:48px">avatar</div>
-        </div>
-      </div>
-    </div>
-    <div data-testid="sidebarColumn">
-      <form role="search"><input data-testid="SearchBox_Search_Input" /></form>
-    </div>
-  </div>
-</body></html>`;
-
-const results = [];
-const expect = (name, actual, wanted) => {
-  results.push({ name, actual, wanted, ok: Object.is(actual, wanted) });
-};
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-/** 功能公布的高度预算（单一事实来源：别在测试里复算 media-cap 的公式） */
-const budgetOf = (window) => Number(window.document.documentElement.dataset.teMediaBudget);
-
-function createWindow(html = HTML, url = 'https://x.com/home') {
-  const virtualConsole = new VirtualConsole();
-  virtualConsole.on('jsdomError', (e) => console.error('[jsdom]', e.message));
-  const dom = new JSDOM(html, {
-    runScripts: 'outside-only',
-    pretendToBeVisual: true,
-    url,
-    virtualConsole,
-  });
-  const { window } = dom;
-  // jsdom 默认视口 1024，低于脚本的 1095 断点会直接走「不放大」分支；放宽到 1440
-  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
-  // 部分断言依赖 offsetWidth / offsetHeight（jsdom 无布局引擎，默认为 0）；
-  // 带 data-w / data-h 的元素返回指定值
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetWidth', {
-    configurable: true,
-    get() {
-      const w = this.getAttribute?.('data-w');
-      return w ? Number(w) : 0;
-    },
-  });
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetHeight', {
-    configurable: true,
-    get() {
-      const h = this.getAttribute?.('data-h');
-      return h ? Number(h) : 0;
-    },
-  });
-  // jsdom 无布局引擎，clientWidth 恒为 0；这里让主列返回宽列已生效后的宽度 980
-  // （媒体钳制 / 解锁器都按它判断「主列已经放宽」），带 data-w 的元素返回指定宽度。
-  Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
-    configurable: true,
-    get() {
-      const forced = this.getAttribute?.('data-w');
-      if (forced) return Number(forced);
-      return this.getAttribute('data-testid') === 'primaryColumn' ? 980 : 0;
-    },
-  });
-  // 给 logo 与导航条编造几何信息，用于验证「搜索框定位到 logo 右侧」的计算
-  Object.defineProperty(window.Element.prototype, 'getBoundingClientRect', {
-    configurable: true,
-    value() {
-      if (this.matches?.('a[aria-label="X"]')) {
-        return { left: 12, right: 62, top: 8, bottom: 58, width: 50, height: 50 };
-      }
-      if (this.matches?.('nav[aria-label="Primary"]')) {
-        return { left: 0, right: 275, top: 0, bottom: 600, width: 275, height: 600 };
-      }
-      if (this.matches?.('#logoRow')) {
-        return { left: 0, right: 275, top: 0, bottom: 50, width: 275, height: 50 };
-      }
-      // 主列：1440 视口实测原生几何（左缘 363，原生宽 600）；宽列生效后由 CSS 变量
-      // 决定真实宽度，这里保持原生值 —— 宽时间线「只放宽、从不收窄」的兜底判据
-      // 读的就是它。带 data-w 时（模拟 X Chat 原生 1187 / Grok 原生 980）按指定值。
-      if (this.matches?.('[data-testid="primaryColumn"]')) {
-        const width = Number(this.getAttribute('data-w') ?? 600);
-        return { left: 363, right: 363 + width, top: 0, bottom: 100, width, height: 100 };
-      }
-      // 右栏：1440 视口实测 350 宽（左缘 993 / 右缘 1343），右缘之外还有 70px 右边距
-      if (this.matches?.('[data-testid="sidebarColumn"]')) {
-        return { left: 993, right: 1343, top: 0, bottom: 100, width: 350, height: 100 };
-      }
-      // 右下角 Grok 抽屉容器：1280×720 实测 350×55 @ y=586（可见按钮距右边 20、距底边 79）。
-      // 设置按钮以它的上缘定位（在 Grok 按钮正上方），见 settings-panel.ts。
-      if (this.matches?.('[data-testid="GrokDrawer"]')) {
-        return { left: 910, right: 1260, top: 586, bottom: 641, width: 350, height: 55 };
-      }
-      // Grok 悬浮按钮本体（收起态就是抽屉头）：实测 55×55，右侧留 20。
-      if (this.matches?.('[data-testid="GrokDrawerHeader"]')) {
-        return { left: 1205, right: 1260, top: 586, bottom: 641, width: 55, height: 55 };
-      }
-      return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
-    },
-  });
-  // 布局桩：1440 视口实测三栏行宽 1050（= 600 主列 + 30 间距 + 350 右栏 + 70 右栏右边距）。
-  // 宽时间线「右栏隐藏时铺满内容区」的目标宽度 = 1050 − 70 = 980 由此可复现。
-  for (const primary of window.document.querySelectorAll('[data-testid="primaryColumn"]')) {
-    const row = primary.parentElement;
-    if (row && !row.hasAttribute('data-w')) row.setAttribute('data-w', '1050');
-  }
-  for (const sidebar of window.document.querySelectorAll('[data-testid="sidebarColumn"]')) {
-    sidebar.style.marginRight = '70px';
-  }
-  return window;
-}
-
-const press = (window, code) =>
-  window.dispatchEvent(
-    new window.KeyboardEvent('keydown', { code, altKey: true, bubbles: true, cancelable: true }),
-  );
-
-/** 打开页内设置弹窗（已打开则原样返回） */
-const openSettings = (window) => {
-  const overlay = window.document.querySelector('.te-settings-overlay');
-  if (overlay?.getAttribute('data-te-settings-open') !== 'true') {
-    window.document.querySelector('.te-settings-fab').click();
-  }
-  return overlay;
-};
-
-/** 通过设置面板切换某个开关（驱动真实 UI，而不是直接调功能内部函数） */
-const toggleSetting = (window, id) => {
-  openSettings(window);
-  const toggle = window.document.querySelector(
-    `.te-settings-row[data-te-setting="${id}"] .te-settings-switch`,
-  );
-  toggle.click();
-  return toggle;
-};
-
-/** 读某个开关当前的 aria-checked */
-const settingState = (window, id) =>
-  window.document
-    .querySelector(`.te-settings-row[data-te-setting="${id}"] .te-settings-switch`)
-    ?.getAttribute('aria-checked');
-
-// ================= 实例一：默认状态 =================
+// ================= 默认状态 =================
 const w1 = createWindow();
 w1.eval(script);
 await sleep(120);
@@ -226,7 +96,7 @@ expect(
   true,
 );
 
-// ================= 实例二：Alt+U 持久化 =================
+// ================= Alt+U 持久化 =================
 const w2 = createWindow();
 // 布尔开关统一以 'true' / 'false' 落盘：false = 关闭推文新样式
 w2.localStorage.setItem('twitter-enhancer:tweet-ui', 'false');
@@ -246,7 +116,7 @@ w2c.eval(script);
 await sleep(120);
 expect('兼容旧格式 on', w2c.document.documentElement.dataset.teUi, 'on');
 
-// ================= 实例三：Alt+B 双向切换侧栏 =================
+// ================= Alt+B 双向切换侧栏 =================
 const w3 = createWindow();
 // false = 不隐藏右栏（即显示）
 w3.localStorage.setItem('twitter-enhancer:sidebar', 'false');
@@ -268,7 +138,7 @@ await sleep(60);
 expect('再次 Alt+B 恢复右栏', root3.dataset.teSidebar, 'on');
 expect('恢复后重新锚定为左对齐', row3.style.justifyContent, 'flex-start');
 
-// ================= 实例四：/ 快捷键拦截 =================
+// ================= / 快捷键拦截 =================
 const w4 = createWindow();
 w4.eval(script);
 await sleep(120);
@@ -288,7 +158,7 @@ w4.dispatchEvent(
 await sleep(30);
 expect('输入框内按 / 不被重复处理', w4.document.activeElement === input4, true);
 
-// ================= 实例五：页内设置面板（取代旧版油猴菜单开关） =================
+// ================= 页内设置面板（取代旧版油猴菜单开关） =================
 // 开关从油猴菜单搬进页面：右下角设置按钮（在 X 的 Grok 悬浮按钮正上方）→ 设置弹窗。
 // 面板按钮位置来自 X 右下角抽屉容器的实测几何（见 createWindow 的 getBoundingClientRect 桩）。
 const HTML_SETTINGS = `<!doctype html><html><head></head><body>
@@ -339,23 +209,70 @@ const dialog5 = overlay5.querySelector('.te-settings-dialog');
 expect('弹窗带对话框语义', dialog5?.getAttribute('role'), 'dialog');
 expect('弹窗标题为「设置」', w5.document.getElementById('te-settings-title')?.textContent, '设置');
 
+/**
+ * 面板开关的**词汇表**（回归锁）：改这里 = 承认「设置项集合变了」，是有意为之的信号。
+ * 数量与顺序不再各写一条断言 —— 面板与注册表的一致性交给下面那条属性断言
+ * （`__twitterEnhancer.settingIds()` 是注册表的只读出口），新增开关只要在这里加一行。
+ */
+const EXPECTED_SETTINGS = [
+  'timeline-wide',
+  'sidebar',
+  'nav-search',
+  'tweet-ui',
+  'media-cap',
+  'media-fit',
+  'content-column',
+];
+const EXPECTED_GROUPS = ['布局', '内容'];
+
 const rows5 = [...w5.document.querySelectorAll('.te-settings-row')];
-expect('五个功能共登记七个开关', rows5.length, 7);
+const panelIds = rows5.map((row) => row.dataset.teSetting);
+// 属性断言：面板是设置注册表的纯函数 —— 分组按首次出现排、组内保持登记顺序（见 settings-panel.ts）
+const registered5 = w5.__twitterEnhancer.settings();
+const expectedPanelIds = [];
+for (const group of [...new Set(registered5.map((item) => item.group))]) {
+  for (const item of registered5) if (item.group === group) expectedPanelIds.push(item.id);
+}
 expect(
-  '开关顺序为 布局三项 + 内容四项',
-  rows5.map((row) => row.dataset.teSetting).join(','),
-  'timeline-wide,sidebar,nav-search,tweet-ui,media-cap,media-fit,content-column',
+  '面板的每一行都由设置注册表推导（同分组同序、无遗漏无重复）',
+  panelIds.join(','),
+  expectedPanelIds.join(','),
+);
+expect(
+  '面板登记的开关与预期词汇表一致（新增 / 删除开关要改 EXPECTED_SETTINGS）',
+  [...panelIds].sort().join(','),
+  [...EXPECTED_SETTINGS].sort().join(','),
 );
 expect(
   '同组开关合并到一个小标题下',
   [...w5.document.querySelectorAll('.te-settings-group-title')].map((t) => t.textContent).join(','),
-  '布局,内容',
+  EXPECTED_GROUPS.join(','),
 );
 expect('宽时间线开关初始为开', settingState(w5, 'timeline-wide'), 'true');
 expect('显示右侧栏开关初始为关（右栏默认隐藏）', settingState(w5, 'sidebar'), 'false');
 expect('内容列排版开关初始为开', settingState(w5, 'content-column'), 'true');
 expect('单图等比开关初始为开', settingState(w5, 'media-fit'), 'true');
 expect('开关的可访问角色为 switch', rows5[0].querySelector('.te-settings-switch')?.getAttribute('role'), 'switch');
+
+// 每一行都必须是一个「接上了功能」的开关：点一下状态翻转，再点一下复位。
+// 这条断言与开关的数量、名字无关 —— 它测的是面板行的契约本身。
+let everyRowToggles = true;
+for (const row of rows5) {
+  const id = row.dataset.teSetting;
+  const before = settingState(w5, id);
+  toggleSetting(w5, id);
+  await sleep(30);
+  const toggled = settingState(w5, id);
+  toggleSetting(w5, id);
+  await sleep(30);
+  const restored = settingState(w5, id);
+  if (toggled === before || restored !== before) everyRowToggles = false;
+}
+expect(
+  '每一行的开关都能翻转并复位（面板行都接上了功能）',
+  `${rows5.length}:${everyRowToggles}`,
+  `${EXPECTED_SETTINGS.length}:true`,
+);
 
 // 点击开关 → 功能生效 + 面板状态刷新
 toggleSetting(w5, 'sidebar');
@@ -436,7 +353,7 @@ expect(
   '55pxx55px',
 );
 
-// ================= 实例六：真实 DOM 结构（logo 是 nav 的兄弟） =================
+// ================= 真实 DOM 结构（logo 是 nav 的兄弟） =================
 // 结构取自 2026-09 实测：内栏 flex column → [logo 行, nav 容器, 发帖按钮]，
 // logo 行默认只撑到 logo 宽度，必须拉伸后才能放下搜索框。
 const HTML_REAL = `<!doctype html><html><head></head><body>
@@ -473,7 +390,7 @@ expect('logo 容器被压住 flex-shrink', w6.document.getElementById('logoH1').
 expect('未退回绝对定位（无 left/top 残留）', host6?.style.left, '');
 expect('内栏未判定为图标条', inner6.dataset.teNavCompact, 'false');
 
-// ================= 实例七：内栏收窄成图标条 =================
+// ================= 内栏收窄成图标条 =================
 const HTML_COMPACT = HTML_REAL.replace('id="inner" data-w="259"', 'id="inner" data-w="120"');
 const w7 = createWindow(HTML_COMPACT);
 w7.eval(script);
@@ -482,7 +399,7 @@ const inner7 = w7.document.getElementById('inner');
 expect('内栏 120px 判定为图标条', inner7.dataset.teNavCompact, 'true');
 expect('图标条下宿主仍挂载（由 CSS 隐藏）', Boolean(inner7.querySelector('.te-search-host')), true);
 
-// ================= 实例八：h1 之上无独立行容器时退回绝对定位 =================
+// ================= h1 之上无独立行容器时退回绝对定位 =================
 const HTML_NO_ROW = `<!doctype html><html><head></head><body>
   <div id="inner" data-w="259">
     <a href="/home" aria-label="X">logo</a>
@@ -506,7 +423,7 @@ const host8 = w8.document.querySelector('.te-search-host');
 expect('logo 与导航项同级时退回绝对定位', host8?.dataset.teSearchLayout, 'absolute');
 expect('绝对定位时宿主挂回导航条', host8?.parentElement === nav8, true);
 
-// ================= 实例九：右栏隐藏时脚本不碰左导航条 =================
+// ================= 右栏隐藏时脚本不碰左导航条 =================
 const HTML_RAIL = `<!doctype html><html><head></head><body>
   <div id="rail" style="position:fixed;left:320px;right:1310px">
     <div id="logoRow"><h1><a href="/home" aria-label="X">logo</a></h1></div>
@@ -532,7 +449,7 @@ expect('左栏宽度未被钉死', rail9.style.width, '');
 expect('右栏隐藏时不动右栏外边距', sb9.style.marginLeft, '');
 expect('右栏隐藏时不改写行对齐（交回 X 原生）', row9.style.justifyContent, '');
 
-// ================= 实例十：右栏显示时把它锚在主列右侧 =================
+// ================= 右栏显示时把它锚在主列右侧 =================
 const w10 = createWindow(HTML_RAIL);
 // false = 不隐藏右栏（即显示）
 w10.localStorage.setItem('twitter-enhancer:sidebar', 'false');
@@ -545,7 +462,7 @@ expect('右栏显示时依然不碰左导航条', rail10.style.left, '320px');
 expect('右栏显示时三栏行改为左对齐', row10.style.justifyContent, 'flex-start');
 expect('右栏紧贴主列右侧（固定 30px）', sb10.style.marginLeft, '30px');
 
-// ================= 实例十四：document-start 透明背景不误判暗色 =================
+// ================= document-start 透明背景不误判暗色 =================
 // X 未完成首次上色时 body 背景是 rgba(0,0,0,0) / transparent；旧版按数值 0 亮度
 // 会误判为 Dark 造成首屏闪烁。新版：透明视为「未上色」，回退系统偏好（jsdom 为 light）。
 const w15 = createWindow();
@@ -555,7 +472,7 @@ const theme15 = w15.document.documentElement.dataset.teTheme;
 expect('透明背景回退系统偏好而非误判暗色', theme15 === 'dark', false);
 expect('透明背景下主题已写入（light）', theme15, 'light');
 
-// ================= 实例十七：滚动新增的写死宽度容器被增量解锁 =================
+// ================= 滚动新增的写死宽度容器被增量解锁 =================
 // 初始容器内已解锁；模拟 React 无限加载追加一节写死 600px 的新内容容器
 // （内含内容单元，才符合「列容器」的角色）。
 // 增量路径应识别并打上标记（无需整树重扫旧节点）。
@@ -572,7 +489,7 @@ await sleep(200); // 等 dom-watch 合并 + rAF 时间片
 expect('滚动新增的 600px 内容容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
 expect('既有解锁标记未被打乱', timeline18.dataset.teWidthUnlocked, 'max');
 
-// ================= 实例十一：SPA 导航后布局自动重算（渲染帧前） =================
+// ================= SPA 导航后布局自动重算（渲染帧前） =================
 // X 是 React SPA，站内导航不触发 load；脚本通过 hook history.pushState 广播 te:route。
 // 模拟 React 在导航时替换三栏行容器（锚点 / min-width 随旧节点丢失）。
 // 关键：这里**不等待 120ms 节流批次**，只等一个宏任务让 MutationObserver 微任务回调跑完。
@@ -630,7 +547,7 @@ expect(
   '30px',
 );
 
-// ================= 实例二十二：主列被 React 替换后宽度解锁器重新绑定 =================
+// ================= 主列被 React 替换后宽度解锁器重新绑定 =================
 // 旧版 bug：解锁器缓存的主列容器被 React 整体换掉后，旧容器已脱离文档，
 // 新增节点都不在旧容器内 → 增量分支全部跳过，解锁静默失效到下一次 resize。
 // 修正后应重新锁定新主列并整树补扫（新主列里写死 600px 的容器要被解锁）。
@@ -657,7 +574,7 @@ expect(
   'fixed',
 );
 
-// ================= 实例十二：宽列媒体高度钳制 =================
+// ================= 宽列媒体高度钳制 =================
 // 800 宽列下横排轮播的竖长行无 X 原生钳制，实测行高可达 774~898px，超过一屏
 // （加正文/操作栏后必须滚轮才能看全）。宿主 = 媒体向上第一个宽度 ≥ lockWidth
 // 且不含正文的祖先。方案 = 只改宿主 layout height 到预算（X 轮播格按内联
@@ -719,7 +636,7 @@ expect('解锁后清除 height', regionM.style.height, '');
 expect('解锁后清除包裹层 height', wrapM.style.height, '');
 expect('解锁后还原包裹层原始 padding', wrapM.style.paddingBottom, 'calc(100% - 4px)');
 
-// ================= 实例二十七：媒体轮播格不被宽度解锁器误伤 =================
+// ================= 媒体轮播格不被宽度解锁器误伤 =================
 // 真机缺陷（2026-09-14 实测，1440 视口，headless 独立 profile，推文详情页）：
 // X 的横向轮播（data-testid=ScrollSnap-List）里每一格的宽度 = 行高 × 内联
 // aspect-ratio —— 3 竖图轮播实测 757 × 0.74248 = 562px，正好落在
@@ -786,7 +703,7 @@ expect(
   'fixed',
 );
 
-// ================= 实例二十：dom-watch 溢出（单批超池上限）后整树补扫 =================
+// ================= dom-watch 溢出（单批超池上限）后整树补扫 =================
 // 旧版 bug：overflow 分支 reset() 清空待检队列后 flush() 因队列为空不会调度任何
 // 扫描 —— 标记被清掉但新增的锁宽元素永远不会被解锁。修正后应显式整树补扫。
 const wOver = createWindow();
@@ -810,7 +727,7 @@ await sleep(700); // dom-watch 冲刷 → overflow → 整树补扫（300 节点
 expect('溢出后新增的锁宽元素被整树补扫命中', burstLocked.dataset.teWidthUnlocked, 'fixed');
 expect('溢出补扫不打乱既有解锁标记', wOver.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
-// ================= 实例二十一：滚动增量新增的媒体走 rAF 帧任务被钳制 =================
+// ================= 滚动增量新增的媒体走 rAF 帧任务被钳制 =================
 // 增量路径不再在 dom-watch 冲刷回调里同步扫描/钳制，而是收进下一个 rAF 帧任务。
 // 宿主链按 cellInnerDiv 边界隔离（与真实 X 结构一致），媒体加载完成只解锁自身链。
 const HTML_MEDIA_LATE = `<!doctype html><html><head></head><body>
@@ -871,7 +788,7 @@ expect('宿主 A 解锁后清除 height', wrapA.style.height, '');
 expect('宿主 B 不受 A 的加载影响仍保持钳制', wrapB.dataset.teMediaCapped, '1');
 expect('宿主 B 高度仍为预算', wrapB.style.height, `${budgetOf(wML)}px`);
 
-// ================= 实例二十三：X 没渲染三栏的页面交回原生 =================
+// ================= X 没渲染三栏的页面交回原生 =================
 // 实测（2026-09-08，1440 视口，headless 独立 profile）：
 // - /home：primaryColumn 原生 600px，右侧有 sidebarColumn（在同一个三栏行里）；
 // - /i/grok：X 自己的「单栏版」内容区 —— primaryColumn 原生 980px、
@@ -936,7 +853,7 @@ await sleep(220);
 expect('时间线页原生 600px 仍正常放宽', wTimeline.document.documentElement.dataset.teTimeline, 'wide');
 expect('时间线页宽度变量为 980px', wTimeline.document.documentElement.style.getPropertyValue('--te-timeline-width'), '980px');
 
-// ================= 实例二十四：宽列关闭时解锁器停摆 / 重开时整树补扫 =================
+// ================= 宽列关闭时解锁器停摆 / 重开时整树补扫 =================
 // 缺陷背景：解锁器只负责打 data-te-width-unlocked 标记，真正放开宽度的 CSS 挂在
 // html[data-te-timeline='wide'] 下 —— 开关关闭后继续扫描既无视觉效果，又白耗全树
 // 遍历；同时关闭期间新增的锁宽元素从未被检视，重开时必须整树补扫（增量路径补不
@@ -966,7 +883,7 @@ await sleep(420);
 expect('重新开启宽列后新增元素被整树补扫解锁', lateGate.dataset.teWidthUnlocked, 'fixed');
 expect('重新开启宽列后既有元素恢复标记', wGate.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
-// ================= 实例二十五：SPA 导航到 X Chat 后立即撤销宽列 =================
+// ================= SPA 导航到 X Chat 后立即撤销宽列 =================
 // 覆盖「路由判定必须早于主列挂载」这条时序：从 /home 导航到 /i/chat 时聊天主列
 // 会晚于路由就绪，若拖到 DOM 批次里发现「主列换了」再撤销，中间可能有一帧用
 // 宽列样式绘制 1187px 的聊天列（1187 → 目标宽 → 1187 的抖动）。
@@ -988,7 +905,7 @@ expect('导航回时间线后恢复宽列', wNav.document.documentElement.datase
 expect('导航回时间线后主列重新铺满内容区', wNav.document.documentElement.dataset.teTimelineWidth, '980');
 expect('导航回时间线后重新解锁', wNav.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
-// ================= 实例二十六：SPA 导航 /home → /i/grok 不把 Grok 钉窄 =================
+// ================= SPA 导航 /home → /i/grok 不把 Grok 钉窄 =================
 // 真机逐帧实测（2026-09-08，1440 视口）：从 /home 点左栏 Grok 进入时，新主列会先以
 // 非原生宽度挂载，旧版按「主列当前宽度是否已宽于目标」判断，会在这个瞬间误判成
 // 「可以放宽」，把 Grok 页的主列钉成 800px（比 X 自己的 980 窄），直接刷新才是 980。
@@ -1039,7 +956,7 @@ await sleep(160);
 expect('导航回 /home 后恢复宽列', wGrokNav.document.documentElement.dataset.teTimeline, 'wide');
 expect('导航回 /home 后主列重新铺满内容区（980）', wGrokNav.document.documentElement.dataset.teTimelineWidth, '980');
 
-// ================= 实例二十八：单图等比（fit）模式 =================
+// ================= 单图等比（fit）模式 =================
 // 真机缺陷（2026-09-14，/home @1440，脚本 ON）：X 用百分比 padding 比例盒把单图铺满列宽，
 // 只压宿主高度会让图片被拉到容器尺寸 —— 实测方图 900×895 渲染成 896×540（比例 1.005 → 1.66，
 // object-fit: fill，等于纵向压扁 40%）。fit 模式改成「按预算高度等比缩宽度 + 水平居中」。
@@ -1159,7 +1076,7 @@ expect(
   null,
 );
 
-// ================= 实例二十九：内容列排版（语义分类 / 焦点帖 / 轮播序号） =================
+// ================= 内容列排版（语义分类 / 焦点帖 / 轮播序号） =================
 // 标本（2026-09-14 实测）：SENA 8ito 那条帖子正文 textContent 长度 0、只有 6 个 emoji <img>，
 // 却按 16px/1.5 的段落排版。分类写在 article[data-te-caption] 上，CSS 按类排版；
 // 焦点帖用「article 里有 a[href] 的路径 === location.pathname」判定（同页 45 条回复均不命中）。
@@ -1238,7 +1155,7 @@ expect('重新开启后语义分类恢复', tweetHero.dataset.teCaption, 'emoji'
 expect('重新开启后焦点帖标记恢复', tweetHero.dataset.teHero, '1');
 expect('内容列排版开关状态刷新为开', settingState(wCol, 'content-column'), 'true');
 
-// ================= 实例三十：轮播格不被当成行宿主，也不进 fit =================
+// ================= 轮播格不被当成行宿主，也不进 fit =================
 // 真机缺陷（2026-09-14，Sena 4 图竖图帖，1440 视口）：轮播某格的「比例盒」在未钳制状态下
 // 宽 591px（≥ lockWidth 566），被当成行宿主单独钳制（格高 540），其余格由行宿主钳制后是 534
 // —— 同一轮播里首格比其它格大一圈，行框也被撑到 1010px；同时该格内部只有 1 张图，
@@ -1301,7 +1218,7 @@ expect(
 );
 expect('单格轮播仍按行宿主钳制', wCarOne.document.getElementById('carList').dataset.teMediaCapped, '1');
 
-// ================= 实例三十一：列容器先出现、推文后渲染（用户实测回归） =================
+// ================= 列容器先出现、推文后渲染（用户实测回归） =================
 // 真机时序：X 先挂「列容器」（带 max-width:600px 的 hashed class），再往里渲染推文。
 // 曾经用「这个元素内部有没有内容单元」判断角色 —— 容器被扫描时内部还是空的，判 false；
 // 而祖先一旦扫过就不会再回看，于是那个唯一的列宽上限始终不被标记，整列退回 600px
@@ -1339,7 +1256,7 @@ expect(
   'max',
 );
 
-// ================= 实例三十二：视频 / GIF 也走等比 + 行高正好等于预算的坑 =================
+// ================= 视频 / GIF 也走等比 + 行高正好等于预算的坑 =================
 // 真机缺陷（2026-09-14，akaoni2gou 的 GIF 帖，1440 视口）：
 // ① X 的播放器比例盒把行高做成了**正好 540 = 预算**，旧实现先判「自然高度 ≤ 预算 → 无需处理」
 //    就直接返回，等比永远不生效 → 盒子停在整列宽 976×540，`object-fit: contain` 把画面缩到
@@ -1416,7 +1333,7 @@ expect(
   '',
 );
 
-// ================= 实例三十三：已钳行里又长出一张图（轮播成型）走增量路径 =================
+// ================= 已钳行里又长出一张图（轮播成型）走增量路径 =================
 // 旧版增量路径分两套：新增节点的 applyOne 撞上 `media.closest(FLAG_SELECTOR)` 会直接返回，
 // 于是「宿主里从 1 张图变成 2 张图（轮播成型）」这类情况在增量路径上被漏掉，只能等下一次
 // 全量对账 —— 期间那一行还留着按单图等比钉下的尺寸。现在两条来源合成一种「种子」，
@@ -1445,7 +1362,7 @@ expect(
 );
 expect('新加入的那张图不被当成等比目标', growPhoto.dataset.teMediaFit, undefined);
 
-// ================= 实例三十四：SPA 导航重挂主列时，不能把我们自己的宽度当成原生列宽 =========
+// ================= SPA 导航重挂主列时，不能把我们自己的宽度当成原生列宽 =========
 // 真机缺陷（2026-09-14 用户实测）：SPA 导航到另一个三栏页时，上一页的 data-te-timeline='wide'
 // 还在，新主列一挂载就被 CSS 写成目标宽 —— 若此刻去「实测原生列宽」，读到的是脚本自己的输出
 // （这里用 data-w="980" 模拟），解锁器判据区间被挪到 [930,1030] → 列容器不再被放开 →
@@ -1465,7 +1382,7 @@ wSpa.history.pushState({}, '', '/indiezhou');
 await sleep(400);
 expect('SPA 后：新主列里的列容器仍被解锁（判据区间没被自己的宽度带偏）', wSpa.document.getElementById('timeline2').dataset.teWidthUnlocked, 'max');
 
-// ================= 实例三十五：窄媒体被 X 逐层 shrink-wrap 时，中间包裹层也要钉住 =========
+// ================= 窄媒体被 X 逐层 shrink-wrap 时，中间包裹层也要钉住 =========
 // 真机缺陷（2026-09-14 用户实测，Ford_R_plus 竖长单图 292×680）：X 自己把竖长图 letterbox 到
 // 510 高（宽只剩 219），媒体列上每一层包裹都窄于 lockWidth —— findHost 只能一路抬到整行
 // （978）才命中宿主，于是这些包裹层落在宿主**内部**、逃出 run。只钉宿主与媒体时，媒体盒被
@@ -1538,7 +1455,7 @@ expect(
   'undefined/undefined',
 );
 
-// ================= 实例三十六：「不搬节点」契约（排版只写属性） =================
+// ================= 「不搬节点」契约（排版只写属性） =================
 // docs/architecture.md 的不变量：脚本不移动 / 不重建 React 管理的节点，排版类功能一律
 // 只写属性、只插自己的 te- 前缀节点。这条红线目前只有约定，没有回归 —— 一旦有人把
 // 「头像/名字/正文/操作栏搬进自建卡片壳」这类改法合进来，真实后果是：X 重渲染把节点放回去
@@ -1654,7 +1571,7 @@ const installFakeResizeObserver = (window) => {
   return instances;
 };
 
-// ================= 实例三十七：页面类型检测（lib/page.ts） =================
+// ================= 页面类型检测（lib/page.ts） =================
 // 参考 control-panel-for-twitter 的 PagePaths + isOnXxxPage：把「现在在哪一页」收敛成
 // 一条纯函数 + 一个事件，功能不再各自写正则。分类结果同时写在 html[data-te-page]。
 const wPage = createWindow(HTML, 'https://x.com/home');
@@ -1695,7 +1612,7 @@ expect('停留在同一类型时不重复派发（导航前后同页）', (() =>
   return pageEvents.length === before;
 })(), true);
 
-// ================= 实例三十八：等条件 + stopIf（lib/wait-for.ts） =================
+// ================= 等条件 + stopIf（lib/wait-for.ts） =================
 // 参考项目的 getElement：等元素出现，但页面切走就放弃 —— 免得「上一个页面的等待」
 // 在新页面里命中一个过期目标，或者一直轮询到超时。
 let probeCount = 0;
@@ -1722,7 +1639,7 @@ expect('waitForElement 在元素出现后返回它', (await foundLate)?.id, 'ver
 const neverFound = pageApi.waitForElement('#verify-never-target', { name: 'verify-timeout', timeout: 40 });
 expect('超时后放弃（resolve null）', await neverFound, null);
 
-// ================= 实例三十九：时间线包装层兼容（lib/timeline.ts） =================
+// ================= 时间线包装层兼容（lib/timeline.ts） =================
 // X 的时间线是「先挂占位层、再换成真实滚动层」，标签页切换时整层再换一次。
 // 参考项目用 `hasAttribute('style')` 判占位；本模块再加上「内部有没有 cellInnerDiv」。
 const HTML_TIMELINE = `<!doctype html><html><head></head><body>
@@ -1800,7 +1717,7 @@ await sleep(240);
 expect('离开时间线页（主列消失）后状态归零为 none', wTlLeave.document.documentElement.dataset.teTimelineState, 'none');
 expect('占位层期间切走：全程没有派发过时间线事件', leaveEvents.length, 0);
 
-// ================= 实例四十：按 CONFIG 拼装的样式表（lib/style-sheet.ts） =================
+// ================= 按 CONFIG 拼装的样式表（lib/style-sheet.ts） =================
 // 参考项目按开关把 CSS 规则 push 成文本（configureXxxCss）。本项目只在「取值来自 CONFIG」
 // 的规则上用这个模型：设置按钮的几何与 config.ts 是同一份事实，写在 CSS 文件里必然漂。
 const fabSheet = w1.document.querySelector('style[data-te-style="settings-fab"]');
@@ -1824,7 +1741,7 @@ const fabRule = staticSheet?.sheet
 expect('静态 CSS 里不再重复写按钮几何（width 交给样式表）', fabRule?.style.width ?? '', '');
 expect('静态 CSS 保留不随配置变化的观感（position: fixed）', fabRule?.style.position ?? '', 'fixed');
 
-// ================= 实例四十一：命名观察器作用域（lib/observer-scope.ts） =================
+// ================= 命名观察器作用域（lib/observer-scope.ts） =================
 // 参考项目的 observers Map + observeElement：观察目标被 React 换掉时，同名重登记会先断开
 // 旧的。旧实现用 `watching` 标志只认第一次挂载 —— SPA 导航换掉内栏后，ResizeObserver
 // 永远盯着脱离文档的旧节点，新内栏没人观察（图标条断点判定静默失效）。
@@ -1858,12 +1775,4 @@ expect(
 );
 
 // ================= 输出 =================
-let failed = 0;
-for (const r of results) {
-  if (!r.ok) failed += 1;
-  console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  →  实际=${String(r.actual)}`);
-}
-console.log(failed === 0 ? `\n全部通过（${results.length} 项）` : `\n${failed} 项失败`);
-process.exit(failed === 0 ? 0 : 1);
-
-
+report();

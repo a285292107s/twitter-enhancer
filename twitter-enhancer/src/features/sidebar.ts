@@ -19,8 +19,8 @@
  *   会误命中 nav a[href="/home"]（"主页"项，宽 259），算出错误坐标使搜索框退化成单图标。
  */
 import { CONFIG } from '../config';
-import { registerSetting, notifySettingsChanged } from '../lib/settings';
-import { readFlag, writeFlag } from '../lib/store';
+import { createToggle } from '../lib/toggle';
+import { setSidebarHidden } from '../lib/gate';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
 import { SEL, NAV_SELECTORS, LOGO_SELECTORS, firstMatch } from '../lib/selectors';
@@ -30,12 +30,8 @@ import './sidebar.css';
 /** 稳定锚点统一登记在 lib/selectors.ts（右栏 / 原生搜索框 / 导航条 / logo 的回退链） */
 const SIDEBAR = SEL.sidebarColumn;
 const SEARCH_INPUT = SEL.searchInput;
-/** 右栏左缘与主列右缘的间距：沿用 X 原生的 30px */
-const SIDEBAR_GAP = 30;
-/** 搜索框高度，用于与 logo 垂直居中对齐 */
+/** 搜索框高度，用于与 logo 垂直居中对齐（与 sidebar.css 里输入框的高度是同一份事实） */
 const SEARCH_HEIGHT = 44;
-/** 内栏宽度低于该值视为「图标条」，放不下输入框 */
-const COMPACT_WIDTH = 240;
 /** 行内布局写到 logo 行容器上的内联样式（切换方案时需要清除） */
 const ROW_STYLE_PROPS = [
   'display',
@@ -232,7 +228,7 @@ function mountBesideLogo(nav: HTMLElement, host: HTMLElement): void {
 
   // 左栏收窄成图标条时放不下输入框（宽度未知时为 0，不误判）
   const width = inner.clientWidth || nav.clientWidth;
-  inner.dataset.teNavCompact = width > 0 && width < COMPACT_WIDTH ? 'true' : 'false';
+  inner.dataset.teNavCompact = width > 0 && width < CONFIG.sidebar.compactWidth ? 'true' : 'false';
 }
 
 /** custom 模式：自建输入框，回车跳搜索页 */
@@ -284,7 +280,7 @@ function moveNativeSearch(host: HTMLElement): boolean {
   return true;
 }
 
-/** 导航条搜索框开关（菜单里可切换，状态持久化） */
+/** 导航条搜索框的当前值 —— 与 createToggle 同步的镜像（理由见 timeline-width.ts 同类注释） */
 let searchEnabled = CONFIG.search.enabled;
 
 /**
@@ -321,7 +317,7 @@ function resetSidebarAnchor(): void {
 }
 
 /**
- * 右栏显示时把它钉在主列右侧 SIDEBAR_GAP（30px）：行改左对齐 + 右栏 margin-left。
+ * 右栏显示时把它钉在主列右侧 CONFIG.sidebar.gap（X 原生 30px）：行改左对齐 + 右栏 margin-left。
  * 不依赖 space-between 在剩余空间里"随机"分配（行被 min-width 撑开后剩余空间会变）。
  *
  * 左导航条不在此处处理 —— 它由 X 自己 fixed 定位，脚本不写（见上面 rail 的说明）。
@@ -336,30 +332,29 @@ function applySidebarGap(): void {
     return;
   }
   row.style.justifyContent = 'flex-start';
-  sidebar.style.marginLeft = `${SIDEBAR_GAP}px`;
+  sidebar.style.marginLeft = `${CONFIG.sidebar.gap}px`;
   anchoredSidebar = sidebar;
   anchoredRow = row;
 }
 
+/**
+ * 右栏隐藏开关的当前值 —— 与 createToggle 同步的镜像（理由见 timeline-width.ts 同类注释）。
+ *
+ * 它（连同存储 key `sidebar`）的语义是「隐藏」，从旧版起就是这么写的；
+ * 设置面板问的是「显示右侧栏」，方向由 createToggle 的 `isEnabled` 翻转 ——
+ * 存储值语义不能改，那是用户机器上已经写下的数据。
+ */
 let hidden = CONFIG.sidebar.hiddenByDefault;
 
 function applyHidden(value: boolean): void {
-  const attribute = value ? 'off' : 'on';
-  // 以属性实际变化为准（首轮从「未设置」到 off 也算变化）：宽时间线以这个属性为准，
-  // feature 启用顺序不该影响它能否收到通知。
-  const changed = document.documentElement.dataset.teSidebar !== attribute;
   hidden = value;
-  document.documentElement.dataset.teSidebar = attribute;
+  setSidebarHidden(value);
   applySidebarGap();
   // 右栏显隐会改变主列可用宽度，通知宽时间线重算（旧版靠观察 data-te-sidebar 属性，
-  // 已随全站观察器收敛移除，改由显式事件驱动）
-  if (changed) dispatchLayoutEvent();
-}
-
-function toggleSidebar(): void {
-  applyHidden(!hidden);
-  void writeFlag('sidebar', hidden);
-  notifySettingsChanged();
+  // 已随全站观察器收敛移除，改由显式事件驱动）。
+  // 这里不用再判「属性是否真的变化」：调用方 createToggle 只在值真的变了、或首帧第一次
+  // 渲染时才会走到这里 —— 两种情况下布局都需要重算。
+  dispatchLayoutEvent();
 }
 
 /**
@@ -395,12 +390,6 @@ function applySearchEnabled(value: boolean): void {
   document.documentElement.dataset.teSearch = value ? 'on' : 'off';
 }
 
-function toggleSearch(): void {
-  applySearchEnabled(!searchEnabled);
-  void writeFlag('nav-search', searchEnabled);
-  notifySettingsChanged();
-}
-
 /**
  * 拦截 X 原生的「/」快捷键。
  * 右栏隐藏后原生搜索框不可见，按 / 会把焦点送进看不见的输入框，
@@ -431,14 +420,26 @@ function interceptSlashShortcut(): void {
 }
 
 export function enableSidebarSearch(): void {
-  applyHidden(hidden);
-  applySearchEnabled(searchEnabled);
-  // 存储读取是异步的，先用默认值渲染，读到用户设置后再覆盖
-  void readFlag('sidebar').then((stored) => {
-    if (stored !== null && stored !== hidden) applyHidden(stored);
+  // 两个开关：默认值 / 存储读取 / 写盘 / 面板登记与刷新全部交给 createToggle（见 lib/toggle.ts）。
+  // 构造顺序（sidebar → nav-search）就是面板里的行序，不要调换。
+  const sidebarToggle = createToggle({
+    id: 'sidebar',
+    group: '布局',
+    label: '显示右侧栏',
+    description: '关闭后隐藏右栏，把横向空间让给主列',
+    shortcut: 'Alt+B',
+    default: CONFIG.sidebar.hiddenByDefault,
+    // 存储值语义是「隐藏」，面板问的是「显示」—— 方向相反，只在面板侧翻转
+    isEnabled: (hiddenValue) => !hiddenValue,
+    apply: applyHidden,
   });
-  void readFlag('nav-search').then((stored) => {
-    if (stored !== null && stored !== searchEnabled) applySearchEnabled(stored);
+  createToggle({
+    id: 'nav-search',
+    group: '布局',
+    label: '导航条搜索框',
+    description: '在左栏 logo 右侧显示搜索框（回车跳转搜索页）',
+    default: CONFIG.search.enabled,
+    apply: applySearchEnabled,
   });
 
   /** 上一次观察过的内栏节点：只有它被 React 换掉时才重绑观察器（避免高频批次里反复重建） */
@@ -525,29 +526,10 @@ export function enableSidebarSearch(): void {
 
   interceptSlashShortcut();
 
-  registerSetting({
-    id: 'sidebar',
-    group: '布局',
-    label: '显示右侧栏',
-    description: '关闭后隐藏右栏，把横向空间让给主列',
-    shortcut: 'Alt+B',
-    isEnabled: () => !hidden,
-    toggle: toggleSidebar,
-  });
-
-  registerSetting({
-    id: 'nav-search',
-    group: '布局',
-    label: '导航条搜索框',
-    description: '在左栏 logo 右侧显示搜索框（回车跳转搜索页）',
-    isEnabled: isSearchEnabled,
-    toggle: toggleSearch,
-  });
-
   // Alt+B 继续保留，方便键盘切换
   window.addEventListener('keydown', (event) => {
     if (!event.altKey || event.code !== 'KeyB') return;
-    toggleSidebar();
+    sidebarToggle.toggle();
     event.preventDefault();
   });
 }

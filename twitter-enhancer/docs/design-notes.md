@@ -20,7 +20,7 @@ X 三栏的内容区是一个固定盒子：主列 600 + 间距 30 + 右栏 350�
 结论：**右栏隐藏 = 主列铺满这个盒子**（`行宽 − 右栏保留的右边距`），不居中、不移左缘，
 于是 `/home` ↔ `/i/grok` 切换时主区几何逐像素相同。右栏显示时才按 `CONFIG.timelineWidth`（800）封顶。
 
-- 断点 `BREAKPOINT = 1095`（`src/features/timeline-width.ts`）；视口更窄时整个功能交回 X 原生。
+- 断点 `CONFIG.timelineBreakpoint = 1095`；视口更窄时整个功能交回 X 原生。
   不要照抄 minimal-twitter 的 988/1000px，那是它自己的两处断点。
 - X 给时间线 / 推文容器写死过 600px 上限（`CONFIG.lockedWidthRange = [560, 660]`），
   落在这个区间且明显窄于主列的元素由 `src/lib/unlock-width.ts` 放开到 100%。
@@ -181,8 +181,11 @@ GIF 帖 696×580、单图帖 5 次均 653×580、4 图轮播 4 格统一 313×57
 
 - **版心 `--te-spine: 764px`**：正文、操作栏共用一条 764px 右边界，昵称行与媒体保持整列宽。
   为什么不用 `72ch`：`ch` 相对元素**自身**字号解析，操作栏继承 X 的 15px 时 72ch 只有 633px，
-  与正文的 764px 对不齐。JS 从真实正文元素读 `max-width` 的解析值写进 `--te-spine`
-  （CSS 里留 764px 默认值，覆盖首屏推文出现前的空窗）；短句帖正文是 20px，按 fontSize 换算回 16px。
+  与正文的 764px 对不齐。**发布者是把 `--te-measure` 写下去的那一层**（`tweet-ui.ts` 的
+  `publishSpine`）：它读真实正文元素 `max-width` 的解析值写进 `--te-spine`，短句帖正文是 20px，
+  按 fontSize 换算回 16px；CSS 里（`tweet-ui.css`）留 764px 默认值覆盖首屏推文出现前的空窗。
+  消费方 content-column 只读这个令牌，不再自己反推 —— 否则「这个 px 值是什么」要靠两个功能
+  的开关状态互相猜，切换顺序一变就会停在兜底值上。
   **注意不能用「量 72 个 0」反推**：同一字体下 72 个 0 实测 785px，而 72ch 解析为 764px。
 - **版心不需要 `!important`**：X 给操作栏写的 `max-width: 600px` 是普通声明，本选择器的
   特异性已经高过它。曾经要压的是宽度解锁器给同一元素打的 `max-width: 100% !important` ——
