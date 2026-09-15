@@ -1533,6 +1533,86 @@ expect(
   'undefined/undefined',
 );
 
+// ================= 实例三十六：「不搬节点」契约（排版只写属性） =================
+// docs/architecture.md 的不变量：脚本不移动 / 不重建 React 管理的节点，排版类功能一律
+// 只写属性、只插自己的 te- 前缀节点。这条红线目前只有约定，没有回归 —— 一旦有人把
+// 「头像/名字/正文/操作栏搬进自建卡片壳」这类改法合进来，真实后果是：X 重渲染把节点放回去
+// 留下半拆的树，且 cellInnerDiv 的高度输入被改坏（空白洞 / 重复推 / 滚不动），
+// 而 jsdom 里所有属性断言都会照旧通过（属性是对的，树已经变了）。
+// 所以这里直接对整条推文的**拓扑**做快照对比：跑脚本前后，每个节点的祖先链逐字相同。
+const HTML_SHAPE = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home" aria-label="X">logo</a></nav>
+  <div id="shapeRow" data-w="978" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div data-testid="cellInnerDiv" id="shapeCell">
+          <article data-testid="tweet" id="shapeTweet">
+            <div data-testid="socialContext">某某转推</div>
+            <div id="shapeCols" style="display:flex">
+              <div data-testid="Tweet-User-Avatar" id="shapeAvatar"><img id="shapeAvatarImg" /></div>
+              <div id="shapeBody">
+                <div data-testid="User-Name">作者 <span>@alice</span> <time datetime="2026-09-15T00:00:00Z">9月15日</time></div>
+                <div data-testid="tweetText">正文文本</div>
+                <div id="shapeMedia" data-w="976" data-h="549">
+                  <div id="shapeRatio" data-w="976" data-h="549" style="padding-bottom: 56.25%">
+                    <div data-testid="tweetPhoto" id="shapePhoto" data-w="600" data-h="549"><img id="shapeImg" /></div>
+                  </div>
+                </div>
+                <div role="group" id="shapeActions"><div data-testid="reply"></div><div data-testid="like"></div></div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+/**
+ * 拓扑签名：每个元素的祖先链 + 自己的标签/class。
+ * 只取**结构**不取属性值，所以脚本写内联样式或 data-te-* 都不会让它变；
+ * 但只要有人把一个节点挪走 / 包一层自建壳 / 新建容器，签名立刻不同。
+ */
+const structureSignature = (root) => {
+  const parts = [];
+  for (const el of root.querySelectorAll('*')) {
+    const chain = [];
+    for (let n = el.parentElement; n && n !== root.parentElement; n = n.parentElement) {
+      chain.push(n.id || n.tagName);
+    }
+    parts.push(`${el.id || el.tagName}:${el.className}:${chain.join('<')}`);
+  }
+  return parts.join('|');
+};
+
+const wShape = createWindow(HTML_SHAPE);
+const shapeTweet = wShape.document.getElementById('shapeTweet');
+const shapeImg = wShape.document.getElementById('shapeImg');
+Object.defineProperty(shapeImg, 'naturalWidth', { configurable: true, value: 1200 });
+Object.defineProperty(shapeImg, 'naturalHeight', { configurable: true, value: 675 });
+const shapeBefore = structureSignature(shapeTweet);
+const shapeChildCount = shapeTweet.querySelectorAll('*').length;
+
+wShape.eval(script);
+await sleep(220);
+
+// 签名本身很长，断言只比「是否逐字相同」，日志里不打印整棵树
+const sameStructure = structureSignature(shapeTweet) === shapeBefore;
+expect('排版契约：脚本没有改动推文里的节点拓扑（祖先链逐字相同）', sameStructure, true);
+expect('排版契约：推文内元素数量不变（没有插入自建卡片壳）', shapeTweet.querySelectorAll('*').length, shapeChildCount);
+// 反向对照：确认这一轮确实有功能写了东西 —— 否则上面两条「没变」是空跑（功能没生效也会通过）
+expect(
+  '排版契约的反向对照：媒体链已被钳制（说明脚本确实跑到了这一条）',
+  wShape.document.getElementById('shapeRatio').dataset.teMediaCapped ? '1' : '未命中',
+  '1',
+);
+expect(
+  '排版契约的反向对照：正文语义分类已写入（内容列排版确实跑到了）',
+  shapeTweet.dataset.teCaption,
+  'short',
+);
+
 // ================= 输出 =================
 let failed = 0;
 for (const r of results) {

@@ -120,8 +120,10 @@ html[data-te-ui='on'] [data-testid='views'] {
   align-items: center;
 }
 
-/* 计数等数字使用等宽数字，避免数值变化时抖动 */
-html[data-te-ui='on'] [role='group'] span {
+/* 计数等数字使用等宽数字，避免数值变化时抖动。
+   必须收进 article：X 在侧栏、下拉菜单等**推文之外**也用 role='group'
+   （菜单项容器），裸写 `[role='group'] span` 是全局溢出，会改到无关区域。 */
+html[data-te-ui='on'] [data-testid='tweet'] [role='group'] span {
   font-variant-numeric: tabular-nums;
 }
 
