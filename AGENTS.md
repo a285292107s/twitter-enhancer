@@ -21,6 +21,6 @@
 | --- | --- |
 | 要用浏览器验证 / 处理登录态 | `twitter-enhancer/docs/browser-automation.md` |
 | 改功能、加开关、跑门禁、发版 | `twitter-enhancer/docs/development.md` |
-| 动 DOM 观察、路由、宽度 / 布局门控 | `twitter-enhancer/docs/architecture.md` |
+| 动 DOM 观察、路由 / 页面类型 / 时间线包装层、宽度 / 布局门控 | `twitter-enhancer/docs/architecture.md` |
 | 改列宽、媒体钳制、推文与设置面板外观 | `twitter-enhancer/docs/design-notes.md` |
 | 改内容列排版（版心 / 内容语义 / 焦点帖 / 单图等比） | `twitter-enhancer/docs/content-column-design.md` |

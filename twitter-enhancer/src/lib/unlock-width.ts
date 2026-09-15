@@ -25,6 +25,7 @@
  */
 import { onDomChanged } from './dom-watch';
 import { isScriptSized } from './script-sized';
+import { SEL } from './selectors';
 
 /** 打在元素上的标记属性名（data-te-width-unlocked） */
 const FLAG = 'teWidthUnlocked';
@@ -35,7 +36,7 @@ const FLAG = 'teWidthUnlocked';
  * 只从它们向上找候选，等于把「这是列的一部分」这件事交给 DOM 结构回答：
  * 轮播格、tweetPhoto、操作栏都在内容单元**内部**，永远不会成为候选。
  */
-const CONTENT_UNIT = '[data-testid="cellInnerDiv"], article[data-testid="tweet"]';
+const CONTENT_UNIT = `${SEL.cell}, ${SEL.tweet}`;
 
 export interface UnlockOptions {
   /**

@@ -19,6 +19,7 @@
 import { CONFIG } from '../config';
 import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
+import { createObserverScope } from '../lib/observer-scope';
 import './tweet-ui.css';
 
 type Theme = 'light' | 'dim' | 'dark';
@@ -117,6 +118,9 @@ export function enableTweetUi(): void {
 
   // 只观察 html / body 两个元素的 style / class / data-theme 变化（窄观察器），
   // X 切换主题 / SPA 导航时会改写这些属性。不做 subtree 监听，无滚动开销。
+  // 走作用域：body 可能在 documentElement 之后才出现，且 X 换主题时观察目标不变 ——
+  // 同名重登记保证「晚到的 body」与「已存在的 html」各自只有一个观察器。
+  const scope = createObserverScope('tweet-ui');
   let scheduled = false;
   const scheduleThemeSync = (): void => {
     if (scheduled) return;
@@ -126,14 +130,17 @@ export function enableTweetUi(): void {
       applyTheme();
     });
   };
-  const observer = new MutationObserver(scheduleThemeSync);
-  observer.observe(document.documentElement, {
+  const themeMutations = {
     attributes: true,
     attributeFilter: ['style', 'class', 'data-theme', 'data-color-scheme'],
-  });
+  };
+  scope.observe(document.documentElement, 'theme-root', scheduleThemeSync, themeMutations);
   const startBodyObserve = (): void => {
     if (document.body) {
-      observer.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] });
+      scope.observe(document.body, 'theme-body', scheduleThemeSync, {
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+      });
     }
   };
   if (document.body) startBodyObserve();

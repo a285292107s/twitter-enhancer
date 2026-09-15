@@ -6,13 +6,56 @@
 
 ```
 main.ts
-├─ startDomWatch()    lib/dom-watch.ts   全站唯一 childList+subtree 观察器，派发 te:layout
-├─ startRouteWatch()  lib/spa-route.ts   hook history API，派发 te:route
-└─ for features       features/index.ts  按注册顺序 enable()
+├─ startDomWatch()      lib/dom-watch.ts  全站唯一 childList+subtree 观察器，派发 te:layout
+├─ startRouteWatch()    lib/spa-route.ts  hook history API，派发 te:route
+├─ startPageWatch()     lib/page.ts       页面类型检测，写 html[data-te-page] 并派发 te:page
+├─ startTimelineWatch() lib/timeline.ts   时间线包装层解析，派发 te:timeline（消费上面的批次）
+├─ exposeDebugSurface() window.__twitterEnhancer  只读纯函数，供 jsdom 门禁直接断言
+└─ for features         features/index.ts  按注册顺序 enable()
 ```
 
+页面类型与时间线**必须在功能之前启动**：功能 `enable()` 时会直接读当前页面类型 /
+时间线状态来决定初始行为（例如 timeline-width 一上来就要判「这一页是不是 X Chat」）。
+
 各功能只订阅事件、不自己 `new MutationObserver(document.documentElement)`。新增共享观察入口时也
-收敛到这两个单例里（X 的虚拟滚动会让节点高频增删，观察器一多就是重复派发 + 掉帧）。
+收敛到这两个单例里（页面类型与时间线只是它们的订阅方，见下一节）。
+挂在**具体节点**上的窄观察器（属性过滤 / ResizeObserver）走 `lib/observer-scope.ts`。
+
+## 从参考实现借来的六个模块
+
+2026-09 对照社区标准实现 [control-panel-for-twitter](https://github.com/insin/control-panel-for-twitter)
+（约 2.6k star，`script.js` 单文件 7.7k 行）后收敛出的抽象。每一层都对应参考项目里一条被反复验证的写法，
+但**取舍按本项目的既有不变量重做过**，不是照抄。
+
+| 模块 | 参考项目的对应物 | 本项目的取舍 |
+| --- | --- | --- |
+| `lib/page.ts` | `PagePaths` + 一堆 `isOnXxxPage()` | 收敛成**一条纯函数** `classifyPath()`（十几条分支可被门禁直接断言）+ `currentPageKind()` 缓存 + `te:page` 事件 |
+| `lib/wait-for.ts` | `getElement(selector, {stopIf})` | 多一个 `waitFor(probe)` 入口（要等的是「状态正确」而不只是「存在」，见 `lib/timeline.ts`）；轮询在后台标签页退回 `setTimeout`（rAF 被冻结） |
+| `lib/observer-scope.ts` | `observers` Map + `observeElement()` | 不只管 MutationObserver，也管 `ResizeObserver`（本项目最容易踩「盯住被替换的旧节点」的地方） |
+| `lib/timeline.ts` | `observeTimeline()` / `observeIndividualTweetTimeline()` | **不新建观察器**，改为消费 dom-watch 批次 + `te:route`（全站单观察器是硬不变量）；占位层 → 真实层的等待用 `waitFor` + `stopIf` |
+| `lib/selectors.ts` | `Selectors` 枚举 | 只登记稳定属性锚点；**结构**判据留在功能模块里（判据属于功能，不属于锚点表） |
+| `lib/style-sheet.ts` | `addStyle()` + 各 `configureXxxCss()` | 只用于「取值来自 CONFIG」的规则（见下「样式放在哪」） |
+
+### 时间线不是一个稳定节点
+
+X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内联 `style`、内部没有 `cellInnerDiv`），
+内容到达后换成真实层；切换时间线标签（推荐 / 关注、个人主页各 tab）时再换一次。
+所以功能**不要长期持有时间线 / 主列节点的引用**：跟着 `te:timeline` / `te:route` 重新解析。
+
+状态锚点 `html[data-te-timeline-state]`（`none` / `placeholder` / `ready`）是这条判定的唯一出口，
+排查与门禁都读它，不要自己复算「这层算不算时间线」。同理 `html[data-te-page]` 是页面类型的唯一出口。
+
+### 样式放在哪（三种，各有明确适用面）
+
+1. **静态 `.css` + 单一门控属性**：绝大多数规则。门控只用 `html[data-te-*]` 一个属性
+   （见下面「单一布局门控点」），**不要**改成「按开关增删规则」——属性方案不存在
+   「JS 没跑起来但 CSS 已生效」的时序裂缝，也不必在 CSS 里重复排除条件。
+2. **运行时拼装的样式表（`lib/style-sheet.ts`）**：取值来自 `CONFIG` 的规则，例如设置按钮的
+   尺寸 / 圆角 / 图标大小 / 兜底位置（它们与 `config.ts` 是同一份事实，写在 CSS 文件里必然漂）。
+   代价是它要等一个挂载点，所以**首屏就要生效的东西不能用它**。
+3. **`:root` 内联变量（`style.setProperty('--te-*')`）**：首屏令牌（tweet-ui 的正文令牌）
+   与**被测得的几何**（`--te-timeline-width`、`--te-spine`）。后者还有一个硬理由：
+   CSS 文件里 `html[data-te-column='on']` 的特异性高于 `:root`，只有内联变量能稳定压过默认值。
 
 ## 不变量
 
@@ -78,6 +121,27 @@ main.ts
   再往里渲染推文），那一刻谓词必然为 false，而扫过的祖先不会回看 ——
   实测后果是带 `max-width:600px` 的列容器始终不被标记，整列退回 600px（用户实测反馈）。
   遍历方向本身就是判据，就没有这种时序依赖。
+- **选择器只有一个来源**：稳定锚点（`data-testid` / `aria-*` / `role`）必须登记在
+  `lib/selectors.ts`，功能里不允许再出现 `[data-testid="…"]` 字面量 —— 曾经同一个锚点写在四个
+  文件里，X 改一次要改四处、漏一处就是静默失效。**结构判据**（父子 / 兄弟关系）是例外：
+  它属于功能自己的判据，写在功能模块里（例如时间线滚动层在 `lib/timeline.ts`、
+  导航条内栏在 `features/sidebar.ts`）。
+- **页面类型只做「不依赖 DOM 时序」的粗判**：`lib/page.ts` 的结论**不能**取代结构判据
+  （三栏 = 主列所在行里有右栏兄弟节点）。它只允许用在两类地方：路由一确定就能判、不能等 DOM 的
+  场景（X Chat / Grok 先撤销宽列），以及「这一页值不值得起时间线功能」。反过来，任何需要看
+  「这一页有哪些容器」的判断都要走 DOM 结构 —— 理由见上面「适用页面按 DOM 结构判」。
+- **挂在具体节点上的观察器必须走 `lib/observer-scope.ts`**：X 换掉节点时旧观察器要跟着断
+  （同名重登记会先断开旧的）。裸写 `new ResizeObserver(...).observe(node)` 的后果是
+  「旧节点上的观察器永远活着、新节点没人观察」—— sidebar 的内栏断点判定曾经就是这么坏的
+  （一个 `watching` 标志只认第一次挂载），而这类缺陷在真机上表现为「导航一次后某个自适应失效」，
+  极难回溯到观察器。
+- **等 X 的元素用 `lib/wait-for.ts`，并且必须给 `stopIf`**：用 `lib/page.ts` 的
+  `pagePathChanged(path)` 构造。没有 `stopIf` 的等待会在导航后一直轮询，
+  最终在另一个页面上命中间名元素。判据顺序固定为「先探测、后 stopIf」：目标已经就绪时，
+  不应该因为同一批里路由刚好变了而放弃。
+- **时间线状态只读 `html[data-te-timeline-state]`**（`none` / `placeholder` / `ready`），
+  不要自己判「这层算不算时间线」；同理页面类型只读 `html[data-te-page]`。
+  这两条判定的实现各自只允许有一处，多了必然漂（一个改、一个忘）。
 
 ## 已修掉的坑（别人已经踩过，别再踩）
 
@@ -99,6 +163,10 @@ main.ts
 - **拓扑判据不能问「里面有没有」**：容器先出现、内容后到达是 X 的常态（列容器 → 推文）。
   任何「内部含有某节点」的谓词都会在那一瞬间为 false，而扫描过的祖先不会再回看。
   要么让判据来自**遍历方向**（从内容向上），要么在内容到达时重新评估。
+- **观察器盯着「当前的那一层」**：X 会用新的节点替换时间线滚动层、主列、三栏行、导航内栏，
+  所以「观察一次就完事」的写法都会在第一次导航后失效（sidebar 的内栏 ResizeObserver、
+  旧的「只认第一次挂载」标志）。观察目标每次重解析、观察器走同名重登记（`lib/observer-scope.ts`），
+  参照 `lib/timeline.ts` 的 `te:timeline` 事件。
 
 ## 视觉重排为什么一律用 CSS（2026-09-15 复核）
 

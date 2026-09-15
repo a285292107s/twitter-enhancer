@@ -39,11 +39,12 @@ import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
 import { markScriptSized, unmarkScriptSized } from '../lib/script-sized';
+import { SEL } from '../lib/selectors';
 
 /** 媒体元素：图片与视频 */
-const MEDIA_SELECTOR = '[data-testid="tweetPhoto"],[data-testid="videoPlayer"]';
+const MEDIA_SELECTOR = `${SEL.tweetPhoto},${SEL.videoPlayer}`;
 /** 轮播作用域：格宽由「行高 × 内联 aspect-ratio」推出，必须由 X 自己算 */
-const CAROUSEL_SCOPE = '[data-testid="ScrollSnap-List"]';
+const CAROUSEL_SCOPE = SEL.scrollSnapList;
 /** 宿主上记录已钳制 / 已挂 ResizeObserver 的标记 */
 const FLAG = 'teMediaCapped';
 const OBSERVED = 'teMediaObserved';
@@ -101,7 +102,7 @@ function restoreInline(el: HTMLElement): void {
 /** 布局是否处于「需要钳制」的状态：宽时间线开启，且主列真的被放宽（>640px） */
 function isActive(): boolean {
   if (document.documentElement.dataset.teTimeline !== 'wide') return false;
-  const primary = document.querySelector<HTMLElement>('div[data-testid="primaryColumn"]');
+  const primary = document.querySelector<HTMLElement>(SEL.primaryColumn);
   return !!primary && primary.clientWidth > 640;
 }
 
@@ -408,7 +409,7 @@ function findHost(el: Element): HTMLElement | null {
       continue;
     }
     if (p.offsetWidth >= CONFIG.media.lockWidth) {
-      if (!p.querySelector('[data-testid="tweetText"]')) return p;
+      if (!p.querySelector(SEL.tweetText)) return p;
     }
     p = p.parentElement;
   }
@@ -471,12 +472,8 @@ function applyCap(host: HTMLElement): void {
     const te = p.getAttribute('data-testid');
     if (p.tagName === 'ARTICLE' || te === 'cellInnerDiv') break;
     if (te === 'primaryColumn' || te === 'sidebarColumn') break;
-    if (p.querySelector('[data-testid="tweetText"]')) break;
-    if (
-      p.querySelector(
-        '[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="unlike"],[data-testid="bookmark"]',
-      )
-    ) {
+    if (p.querySelector(SEL.tweetText)) break;
+    if (p.querySelector(SEL.actionBar)) {
       break;
     }
     run.push(p);

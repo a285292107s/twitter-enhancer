@@ -22,6 +22,8 @@
  * 也不造成滚动开销（childList 才是滚动时的噪声来源）。
  */
 
+import { SEL, LOGO_SELECTORS } from './selectors';
+
 export interface DomWatchDetail {
   /** 本批次累计的 mutation 记录数 */
   count: number;
@@ -53,13 +55,13 @@ const SAMPLE_LIMIT = 8;
  * X 的 SPA 导航会整棵卸载并重挂 app shell —— 这些节点全部换成新节点，
  * 内联样式随之丢失。
  *
- * LOGO_SELECTOR 只用于识别「导航条被整体重建」（搜索宿主挂载点随之重建）；
+ * LOGO_SELECTORS 只用于识别「导航条被整体重建」（搜索宿主挂载点随之重建）；
  * 左导航条本身的位置由 X 自己 fixed 定位，脚本不写（见 sidebar.ts）。
  */
-const PRIMARY_SELECTOR = '[data-testid="primaryColumn"]';
-const SIDEBAR_SELECTOR = '[data-testid="sidebarColumn"]';
+const PRIMARY_SELECTOR = SEL.primaryColumn;
+const SIDEBAR_SELECTOR = SEL.sidebarColumn;
 /** 左栏 logo：导航条（搜索宿主挂载点）随之整体重建，身份变化同样要立即补写 */
-const LOGO_SELECTOR = 'a[aria-label="X"]';
+const LOGO_SELECTOR = LOGO_SELECTORS[0];
 
 let lastPrimary: Element | null = null;
 let lastSidebar: Element | null = null;

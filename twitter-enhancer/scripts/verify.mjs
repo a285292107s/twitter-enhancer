@@ -9,6 +9,11 @@
  * 4. 宽时间线 timeline-width：右栏隐藏时主列铺满 X 内容区（与 /i/grok 一致、左缘不动），
  *    右栏显示时 800 封顶；X 没渲染三栏的页面（/i/grok 单栏、/i/chat 双栏）交回原生；
  * 5. 页内设置面板 settings-panel：右下角设置按钮（Grok 按钮上方）、弹窗、开关生效。
+ * 6. 页面类型检测 lib/page：分类纯函数、html[data-te-page]、te:page 事件；
+ * 7. 等条件 lib/wait-for：stopIf 提前放弃 / 命中返回元素 / 超时放弃；
+ * 8. 时间线包装层 lib/timeline：占位层不算时间线、真实层替换、标签页整层替换、旧结构兜底；
+ * 9. 按 CONFIG 拼装的样式表 lib/style-sheet：设置按钮几何与 config.ts 同源；
+ * 10. 命名观察器作用域 lib/observer-scope：节点被替换时同名重登记、旧观察器断开。
  *
  * 运行：node scripts/verify.mjs（或 npm run verify）
  */
@@ -1611,6 +1616,245 @@ expect(
   '排版契约的反向对照：正文语义分类已写入（内容列排版确实跑到了）',
   shapeTweet.dataset.teCaption,
   'short',
+);
+
+// ================= 验证出口 =================
+/**
+ * 注入脚本并等一轮 DOM 批次，返回脚本暴露的只读验证出口
+ * （`window.__twitterEnhancer`，见 src/main.ts 的 exposeDebugSurface）。
+ * 纯逻辑（页面分类、waitFor 的 stopIf 语义）只有通过它才能被直接断言 ——
+ * 否则只能靠 DOM 副作用间接观察，分支覆盖不到。
+ */
+const inject = async (window, wait = 140) => {
+  window.eval(script);
+  await sleep(wait);
+  return window.__twitterEnhancer;
+};
+
+/** 装一个假的 ResizeObserver：记录实例、观察目标与是否被断开（jsdom 没有它） */
+const installFakeResizeObserver = (window) => {
+  const instances = [];
+  class FakeResizeObserver {
+    constructor() {
+      this.observed = [];
+      this.disconnected = false;
+      instances.push(this);
+    }
+    observe(target) {
+      this.observed.push(target);
+    }
+    unobserve(target) {
+      this.observed = this.observed.filter((el) => el !== target);
+    }
+    disconnect() {
+      this.disconnected = true;
+    }
+  }
+  window.ResizeObserver = FakeResizeObserver;
+  return instances;
+};
+
+// ================= 实例三十七：页面类型检测（lib/page.ts） =================
+// 参考 control-panel-for-twitter 的 PagePaths + isOnXxxPage：把「现在在哪一页」收敛成
+// 一条纯函数 + 一个事件，功能不再各自写正则。分类结果同时写在 html[data-te-page]。
+const wPage = createWindow(HTML, 'https://x.com/home');
+const pageEvents = [];
+wPage.document.addEventListener('te:page', (event) => pageEvents.push(event.detail));
+const pageApi = await inject(wPage);
+
+expect('启动时页面类型写在 html[data-te-page]', wPage.document.documentElement.dataset.tePage, 'home');
+expect('启动即派发过一次 te:page', pageEvents.length >= 1, true);
+expect('分类：首页', pageApi.classifyPath('/home'), 'home');
+expect('分类：个人主页', pageApi.classifyPath('/jack'), 'profile');
+expect('分类：个人主页标签页', pageApi.classifyPath('/jack/media'), 'profile');
+expect('分类：详情页（带 /photo/1 后缀）', pageApi.classifyPath('/jack/status/123/photo/1'), 'status');
+expect('分类：搜索页', pageApi.classifyPath('/search'), 'search');
+expect('分类：话题页也归搜索', pageApi.classifyPath('/hashtag/abc'), 'search');
+expect('分类：通知页', pageApi.classifyPath('/notifications'), 'notifications');
+expect('分类：X Chat 子路由', pageApi.classifyPath('/i/chat/123'), 'messages');
+expect('分类：私信根路径（会 302 到 /i/chat）', pageApi.classifyPath('/messages'), 'messages');
+expect('分类：Grok 单栏页', pageApi.classifyPath('/i/grok'), 'grok');
+expect('分类：设置页', pageApi.classifyPath('/settings/display'), 'settings');
+expect('分类：保留路径不会被当成个人主页', pageApi.classifyPath('/i/history'), 'other');
+expect('时间线类页面：首页', pageApi.isTimelinePage('home'), true);
+expect('时间线类页面：详情页', pageApi.isTimelinePage('status'), true);
+expect('时间线类页面：X Chat 不是', pageApi.isTimelinePage('messages'), false);
+expect('时间线类页面：Grok 不是', pageApi.isTimelinePage('grok'), false);
+
+wPage.history.pushState({}, '', '/jack');
+await sleep(30);
+expect('导航后页面类型更新为 profile', wPage.document.documentElement.dataset.tePage, 'profile');
+expect('页面类型变化派发 te:page（带新类型）', pageEvents.at(-1)?.kind, 'profile');
+expect('te:page 带上前一个类型', pageEvents.at(-1)?.previous, 'home');
+wPage.history.pushState({}, '', '/jack/status/456');
+await sleep(30);
+expect('导航到详情页后类型更新为 status', wPage.document.documentElement.dataset.tePage, 'status');
+expect('停留在同一类型时不重复派发（导航前后同页）', (() => {
+  const before = pageEvents.length;
+  wPage.history.pushState({}, '', '/jack/status/456?s=1');
+  return pageEvents.length === before;
+})(), true);
+
+// ================= 实例三十八：等条件 + stopIf（lib/wait-for.ts） =================
+// 参考项目的 getElement：等元素出现，但页面切走就放弃 —— 免得「上一个页面的等待」
+// 在新页面里命中一个过期目标，或者一直轮询到超时。
+let probeCount = 0;
+const pendingWait = pageApi.waitFor(
+  () => {
+    probeCount += 1;
+    return null;
+  },
+  { name: 'verify-stopIf', stopIf: () => wPage.location.pathname !== '/jack/status/456' },
+);
+wPage.history.pushState({}, '', '/i/grok');
+expect('stopIf 命中时放弃等待（resolve null）', await pendingWait, null);
+const probesAtAbort = probeCount;
+expect('放弃前确实探测过', probesAtAbort >= 1, true);
+await sleep(150);
+expect('放弃后不再继续轮询（探测次数停在放弃那一刻）', probeCount, probesAtAbort);
+
+const lateTarget = wPage.document.createElement('div');
+lateTarget.id = 'verify-late-target';
+const foundLate = pageApi.waitForElement('#verify-late-target', { name: 'verify-late' });
+wPage.document.body.appendChild(lateTarget);
+expect('waitForElement 在元素出现后返回它', (await foundLate)?.id, 'verify-late-target');
+
+const neverFound = pageApi.waitForElement('#verify-never-target', { name: 'verify-timeout', timeout: 40 });
+expect('超时后放弃（resolve null）', await neverFound, null);
+
+// ================= 实例三十九：时间线包装层兼容（lib/timeline.ts） =================
+// X 的时间线是「先挂占位层、再换成真实滚动层」，标签页切换时整层再换一次。
+// 参考项目用 `hasAttribute('style')` 判占位；本模块再加上「内部有没有 cellInnerDiv」。
+const HTML_TIMELINE = `<!doctype html><html><head></head><body>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" data-w="980" style="width:980px">
+      <section>
+        <h1>主页</h1>
+        <div aria-label="时间线"><div id="timeline-placeholder"></div></div>
+      </section>
+    </div>
+    <div data-testid="sidebarColumn" style="margin-right:70px"></div>
+  </div>
+</body></html>`;
+
+const wTl = createWindow(HTML_TIMELINE, 'https://x.com/home');
+const timelineEvents = [];
+wTl.document.addEventListener('te:timeline', (event) => timelineEvents.push(event.detail));
+const tlApi = await inject(wTl);
+const tlState = () => wTl.document.documentElement.dataset.teTimelineState;
+
+expect('占位层期间状态为 placeholder', tlState(), 'placeholder');
+expect('占位层不被当成时间线（不派发 te:timeline）', timelineEvents.length, 0);
+expect('占位层期间 getTimelineRoot() 为空', tlApi.getTimelineRoot(), null);
+
+const realTimeline = wTl.document.createElement('div');
+realTimeline.id = 'timeline-real';
+realTimeline.setAttribute('style', 'max-width:600px');
+realTimeline.innerHTML = '<div data-testid="cellInnerDiv"><article data-testid="tweet">hi</article></div>';
+wTl.document.getElementById('timeline-placeholder').replaceWith(realTimeline);
+await sleep(240);
+expect('真实层替换占位层后状态为 ready', tlState(), 'ready');
+expect('真实层替换占位层后派发一次 te:timeline', timelineEvents.length, 1);
+expect('首次派发的 reason 为 appeared', timelineEvents[0]?.reason, 'appeared');
+expect('派发的 root 是真实滚动层', timelineEvents[0]?.root?.id, 'timeline-real');
+expect('getTimelineRoot() 同步到真实层', tlApi.getTimelineRoot()?.id, 'timeline-real');
+
+const tabTimeline = wTl.document.createElement('div');
+tabTimeline.id = 'timeline-tab2';
+tabTimeline.setAttribute('style', 'max-width:600px');
+tabTimeline.innerHTML = '<div data-testid="cellInnerDiv"><article data-testid="tweet">tab2</article></div>';
+realTimeline.replaceWith(tabTimeline);
+await sleep(240);
+expect('标签页切换（整层替换）再派发一次', timelineEvents.length, 2);
+expect('整层替换的 reason 为 replaced', timelineEvents[1]?.reason, 'replaced');
+expect('替换后的 root 是新滚动层', tlApi.getTimelineRoot()?.id, 'timeline-tab2');
+
+// 旧结构：没有 section > h1 包装时也要能解析到滚动层（新旧包装层兼容）
+const HTML_TIMELINE_LEGACY = `<!doctype html><html><head></head><body>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" data-w="980" style="width:980px">
+      <div aria-label="时间线">
+        <div id="legacy-scroller" style="max-width:600px">
+          <div data-testid="cellInnerDiv"><article data-testid="tweet">legacy</article></div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn" style="margin-right:70px"></div>
+  </div>
+</body></html>`;
+const wTlLegacy = createWindow(HTML_TIMELINE_LEGACY, 'https://x.com/home');
+const legacyApi = await inject(wTlLegacy);
+expect('旧结构（无 section/h1 包装）也能解析到滚动层', legacyApi.getTimelineRoot()?.id, 'legacy-scroller');
+expect('旧结构下状态为 ready', wTlLegacy.document.documentElement.dataset.teTimelineState, 'ready');
+
+// 占位层期间切走：等待放弃，状态跟着当前 DOM 归零，且从未把占位层当成时间线
+const wTlLeave = createWindow(HTML_TIMELINE, 'https://x.com/home');
+const leaveEvents = [];
+wTlLeave.document.addEventListener('te:timeline', (event) => leaveEvents.push(event.detail));
+await inject(wTlLeave);
+expect('切走前处于占位层等待', wTlLeave.document.documentElement.dataset.teTimelineState, 'placeholder');
+wTlLeave.history.pushState({}, '', '/i/chat');
+await sleep(60);
+wTlLeave.document.getElementById('row').remove();
+await sleep(240);
+expect('离开时间线页（主列消失）后状态归零为 none', wTlLeave.document.documentElement.dataset.teTimelineState, 'none');
+expect('占位层期间切走：全程没有派发过时间线事件', leaveEvents.length, 0);
+
+// ================= 实例四十：按 CONFIG 拼装的样式表（lib/style-sheet.ts） =================
+// 参考项目按开关把 CSS 规则 push 成文本（configureXxxCss）。本项目只在「取值来自 CONFIG」
+// 的规则上用这个模型：设置按钮的几何与 config.ts 是同一份事实，写在 CSS 文件里必然漂。
+const fabSheet = w1.document.querySelector('style[data-te-style="settings-fab"]');
+const fabCss = fabSheet?.textContent ?? '';
+expect('设置按钮几何由运行时样式表提供', fabSheet !== null, true);
+expect('样式表宽度来自 CONFIG.settings.fab.size', fabCss.includes('width:55px'), true);
+expect('样式表高度来自 CONFIG.settings.fab.size', fabCss.includes('height:55px'), true);
+expect('样式表圆角来自 CONFIG.settings.fab.radius', fabCss.includes('border-radius:16px'), true);
+expect('样式表图标大小来自 CONFIG.settings.fab.iconSize', fabCss.includes('--te-set-fab-icon:32px'), true);
+expect(
+  '样式表兜底位置来自 CONFIG.settings（right / fallbackBottom）',
+  fabCss.includes('right:20px') && fabCss.includes('bottom:146px'),
+  true,
+);
+const staticSheet = [...w1.document.querySelectorAll('head style')].find(
+  (el) => el.getAttribute('data-te-style') == null && el.textContent.includes('.te-settings-fab'),
+);
+const fabRule = staticSheet?.sheet
+  ? [...staticSheet.sheet.cssRules].find((rule) => rule.selectorText === '.te-settings-fab')
+  : null;
+expect('静态 CSS 里不再重复写按钮几何（width 交给样式表）', fabRule?.style.width ?? '', '');
+expect('静态 CSS 保留不随配置变化的观感（position: fixed）', fabRule?.style.position ?? '', 'fixed');
+
+// ================= 实例四十一：命名观察器作用域（lib/observer-scope.ts） =================
+// 参考项目的 observers Map + observeElement：观察目标被 React 换掉时，同名重登记会先断开
+// 旧的。旧实现用 `watching` 标志只认第一次挂载 —— SPA 导航换掉内栏后，ResizeObserver
+// 永远盯着脱离文档的旧节点，新内栏没人观察（图标条断点判定静默失效）。
+const wScope = createWindow(HTML_REAL);
+const roInstances = installFakeResizeObserver(wScope);
+await inject(wScope);
+const oldInner = wScope.document.getElementById('inner');
+const observes = (ro, el) => ro.observed.includes(el);
+const innerObserversBefore = roInstances.filter((ro) => observes(ro, oldInner));
+expect('搜索宿主的内栏观察器已登记', innerObserversBefore.length, 1);
+expect('登记时处于活动状态', innerObserversBefore[0].disconnected, false);
+
+// 模拟 X 的 SPA 导航：整块内栏换成新节点（新节点里没有脚本的宿主，走慢路径重挂）
+const freshInner = wScope.document.createElement('div');
+freshInner.id = 'inner';
+freshInner.setAttribute('data-w', '259');
+freshInner.innerHTML =
+  '<div id="logoRow"><h1 id="logoH1"><a href="/home" aria-label="X">logo</a></h1></div>' +
+  '<div id="navWrap"><nav aria-label="Primary"><a href="/home">主页</a></nav></div>';
+oldInner.replaceWith(freshInner);
+await sleep(160);
+
+expect('旧内栏的观察器被断开（不再盯着脱离文档的节点）', innerObserversBefore[0].disconnected, true);
+const innerObserversAfter = roInstances.filter((ro) => observes(ro, freshInner));
+expect('新内栏被重新观察', innerObserversAfter.length, 1);
+expect('新观察器处于活动状态', innerObserversAfter[0].disconnected, false);
+expect(
+  '同名只留一个活动观察器（同名重登记）',
+  roInstances.filter((ro) => !ro.disconnected && (observes(ro, oldInner) || observes(ro, freshInner))).length,
+  1,
 );
 
 // ================= 输出 =================

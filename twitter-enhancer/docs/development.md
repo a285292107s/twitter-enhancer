@@ -14,6 +14,16 @@
 ## 新增 / 修改一个功能
 
 1. 在 `src/features/` 下建模块，导出 `enableXxx()`；共享工具放 `src/lib/`。
+   先看 `src/lib/` 里有没有能用的地基（下表），别自己再造一遍：
+
+   | 要干的事 | 用哪个 |
+   | --- | --- |
+   | 判断「现在在哪一页」（Home / Profile / Status / Chat …） | `lib/page.ts` 的 `currentPageKind()` / `onPageKindChanged()` / `pagePathChanged()` |
+   | 等 X 的某个元素出现（路由切走就放弃） | `lib/wait-for.ts` 的 `waitFor` / `waitForElement`（**必须给 `stopIf: pagePathChanged(path)`**） |
+   | 观察具体节点（属性变化 / ResizeObserver） | `lib/observer-scope.ts` 的 `createObserverScope()` |
+   | 知道时间线出现 / 被整层替换（标签页切换） | `lib/timeline.ts` 的 `onTimelineChanged()` |
+   | 要一个 X 的选择器 | `lib/selectors.ts` 登记后引用，**不要**在功能里写字面量 |
+   | 取值来自 CONFIG 的 CSS 规则 | `lib/style-sheet.ts` 的 `createStyleSheet()`（判据见 architecture.md「样式放在哪」） |
 2. 可调数值加进 `src/config.ts`（**不要**散落在功能文件里写魔数）。
 3. 在 `src/features/index.ts` 登记。`settings-panel` 必须排最后 —— 各功能先把开关登记进
    设置注册表，面板首帧渲染才是完整列表。
@@ -30,6 +40,16 @@
    若新排版只在特定条件下才动节点，要把它自己的条件复现进这个夹具。
 6. 改完跑 `npm run verify`；涉及真实布局几何的改动再跑 `npm run e2e:real`。
 
+## 验证出口（`window.__twitterEnhancer`）
+
+jsdom 回归跑的是打包后的 IIFE，没有模块导出 —— 纯逻辑（页面类型分类的十几条分支、
+`waitFor` 的 `stopIf` 语义）只能靠 DOM 副作用间接观察，分支覆盖不到。因此 `main.ts` 把一组
+**只读纯函数**挂在 `window.__twitterEnhancer` 上（`classifyPath` / `currentPageKind` /
+`isTimelinePage` / `getTimelineRoot` / `waitFor` / `waitForElement`），门禁直接断言它们。
+
+新增字段前先读这条约束：**只能挂无副作用的查询函数，绝不挂开关或写入口** ——
+脚本的行为入口只有「页内设置面板 + 快捷键」两条，不能因为这个出口多出第三条。
+
 ## 迭代与分发
 
 **不要用 vite-plugin-monkey 的 dev 模式**（裸 `vite` / `vite dev`，或预览页里那个 `server:` 开头的
@@ -44,12 +64,13 @@
 
 ## 什么时候要读别的文档
 
-- 动 DOM 观察器、路由 hook、宽度 / 布局门控 → [architecture.md](./architecture.md)
+- 动 DOM 观察器、路由 hook、页面类型、时间线包装层、宽度 / 布局门控 → [architecture.md](./architecture.md)
 - 动列宽、媒体钳制、推文与设置面板外观 / 尺寸 → [design-notes.md](./design-notes.md)
 - 需要浏览器里验证或修登录态 → [browser-automation.md](./browser-automation.md)
 
 ## 硬编码来源
 
 新增选择器优先用 `data-testid`，其次是稳定 `aria-*` / `role`；绝不用 `css-xxxx` 这类哈希 class
-（X 每次发版都换）。任何从真机量出来的数值（宽度、间距、时长）都要在注释里写明「实测 + 日期」，
+（X 每次发版都换）。稳定锚点统一登记在 `src/lib/selectors.ts`，功能模块里只写引用。
+任何从真机量出来的数值（宽度、间距、时长）都要在注释里写明「实测 + 日期」，
 来源和分析结论进 `docs/design-notes.md`、`docs/architecture.md` 或源码头部注释，别只留在对话里。

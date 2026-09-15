@@ -25,14 +25,15 @@ import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
+import { currentStatusPath } from '../lib/page';
+import { onTimelineChanged } from '../lib/timeline';
+import { SEL } from '../lib/selectors';
 import './content-column.css';
 
-const TWEET_SELECTOR = 'article[data-testid="tweet"]';
-const TEXT_SELECTOR = '[data-testid="tweetText"]';
-const SNAP_SELECTOR = '[data-testid="ScrollSnap-List"]';
-const CELL_SELECTOR = '[data-testid="cellInnerDiv"]';
-/** 焦点帖 URL：/user/status/123（可选 ?query 已由 pathname 排除） */
-const STATUS_PATH = /^\/[^/]+\/status\/\d+/;
+const TWEET_SELECTOR = SEL.tweet;
+const TEXT_SELECTOR = SEL.tweetText;
+const SNAP_SELECTOR = SEL.scrollSnapList;
+const CELL_SELECTOR = SEL.cell;
 
 const CAROUSEL_ATTR = 'teCarousel';
 const HERO_ATTR = 'teHero';
@@ -121,15 +122,10 @@ function classifyCaption(article: HTMLElement): void {
   if (article.dataset[CAPTION_ATTR] !== kind) article.dataset[CAPTION_ATTR] = kind;
 }
 
-/** 当前页是否是帖子详情页；是则返回焦点帖的路径，否则 null */
-function heroPath(): string | null {
-  const match = STATUS_PATH.exec(location.pathname);
-  return match ? match[0] : null;
-}
-
 /**
  * 焦点帖判定：article 里存在指向当前路径的链接（时间戳 / 图片链接都指向它）。
  * 用 getAttribute 直接比较字符串，避免为每篇推文构造 URL 对象。
+ * 路径由 `lib/page.ts` 的 `currentStatusPath()` 给出（非详情页为 null）。
  */
 function markHero(article: HTMLElement, path: string | null): void {
   if (!path) return;
@@ -240,7 +236,7 @@ function markCarousel(article: HTMLElement): void {
 
 function processArticle(article: HTMLElement): void {
   classifyCaption(article);
-  markHero(article, heroPath());
+  markHero(article, currentStatusPath());
   markCarousel(article);
 }
 
@@ -249,7 +245,7 @@ function scanAll(): void {
   clearHeroMarks();
   // 版心要等首屏正文出现才能读到（取决于正文的解析字号）
   resolveSpine();
-  const path = heroPath();
+  const path = currentStatusPath();
   for (const article of document.querySelectorAll<HTMLElement>(TWEET_SELECTOR)) {
     classifyCaption(article);
     markHero(article, path);
@@ -305,7 +301,7 @@ function resolveSpine(force = false): void {
   if (spineResolved && !force) return;
   // 只有推文 UI 开启时正文上的 max-width 才是我们的 72ch
   if (document.documentElement.dataset.teUi !== 'on') return;
-  const sample = document.querySelector<HTMLElement>('[data-testid="tweetText"]');
+  const sample = document.querySelector<HTMLElement>(SEL.tweetText);
   if (!sample) return;
   const style = getComputedStyle(sample);
   if (!style.maxWidth.endsWith('px')) return;
@@ -372,6 +368,12 @@ export function enableContentColumn(): void {
     }
   });
   onRouteChanged(() => {
+    if (enabled) scheduleFullScan();
+  });
+  // 时间线**整层被替换**（标签页切换 / X 先用占位层再换真实层）：写在旧层节点上的
+  // 标记与轮播序号随之失效，整树补扫一次。与上面的路由补扫会在同一个 rAF 帧里合并
+  // （fullScanPending + queueFrameWork），不会重复扫。
+  onTimelineChanged(() => {
     if (enabled) scheduleFullScan();
   });
 

@@ -69,26 +69,21 @@ html[data-te-theme='dark'] {
 
 /* ===== 右下角设置按钮（Grok 按钮正上方） =====
    尺寸 / 圆角 / 图标大小与 X 自己的悬浮按钮一致（55×55 / 16px / 32px，2026-09-13 实测），
-   JS 还会镜像 X 按钮的实时计算样式（见 settings-panel.ts 的 syncFabLook）；
-   下面的令牌是页面里读不到 X 按钮时的兜底（如 /i/grok），取值按 X 亮色按钮抄。 */
+   但**取值不写在这里**：它们与 CONFIG.settings 是同一份事实，改由 JS 按配置拼装成
+   运行时样式表（`lib/style-sheet.ts` 的 `settings-fab`，见 settings-panel.ts 的 renderFabSheet），
+   这里只留不随配置变化的观感。
+   `--te-set-fab-icon` 的兜底值同样只是为了「样式表挂载前/失败时」仍能画出图标。 */
 .te-settings-fab {
   position: fixed;
-  /* 真实位置由 JS 按 X 右下角抽屉列的几何写入（见 settings-panel.ts），
-     这里的值是「容器都不在」时的兜底（实测 1280×720：Grok 按钮底边距 79 + 高 55 + 间距 12） */
-  right: 20px;
-  bottom: 146px;
   z-index: 2147483000;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 55px;
-  height: 55px;
   margin: 0;
   padding: 0;
   appearance: none;
   border: 1px solid var(--te-set-fab-border);
-  border-radius: 16px;
   background: var(--te-set-fab-bg);
   color: var(--te-set-fab-fg);
   box-shadow: var(--te-set-fab-shadow);

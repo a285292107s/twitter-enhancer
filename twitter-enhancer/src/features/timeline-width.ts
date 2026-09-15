@@ -54,12 +54,14 @@ import { readFlag, writeFlag } from '../lib/store';
 import { createWidthUnlocker } from '../lib/unlock-width';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
+import { currentPageKind, onPageKindChanged } from '../lib/page';
+import { SEL } from '../lib/selectors';
 import './timeline-width.css';
 
-/** 主列选择器 */
-const PRIMARY_COLUMN = 'div[data-testid="primaryColumn"]';
+/** 主列选择器（稳定锚点统一登记在 lib/selectors.ts） */
+const PRIMARY_COLUMN = SEL.primaryColumn;
 /** 右栏选择器：三栏行里 X 自己渲染的那一栏 */
-const SIDEBAR_COLUMN = 'div[data-testid="sidebarColumn"]';
+const SIDEBAR_COLUMN = SEL.sidebarColumn;
 /** X 原生主列宽度：可用空间不足时退回该值，避免主列被压得比原生还窄 */
 const MIN_WIDTH = 600;
 /** 视口右侧安全边距 */
@@ -86,11 +88,15 @@ const SIDEBAR_HIDDEN = 'off';
  * （typefully/minimal-twitter）也为 X Chat 单独写了例外规则。
  * 结构判据（行里没有右栏）本已能挡掉它，这里再按路由挡一道：路由判定不依赖
  * DOM 时序，从 /home 导航过去时不必等聊天主列挂载就能先撤销宽列。
+ * 路由类型由 `lib/page.ts` 统一分类（`/messages` 与 `/i/chat` 同归 'messages'），
+ * 这里不再自己写正则 —— 页面类型判据只允许有一处。
  *
  * drawer 形态（`chat-drawer-root`）是浮层、不在 primaryColumn 内，不受宽列
  * 影响，因此不需要为它加判定。
  */
-const CHAT_ROUTE = /^\/i\/chat(\/|$)/;
+function isChatRoute(): boolean {
+  return currentPageKind() === 'messages';
+}
 
 let wide = CONFIG.timelineWide;
 /** 上次实际写入的几何（用于判定是否真的变化，避免无意义地反复广播 te:layout） */
@@ -228,7 +234,7 @@ function writeTimelineLayout(): void {
   // SPA 从 /home 导航到 /i/chat 时聊天主列会晚于路由就绪，若拖到 DOM 批次里
   // 发现「主列换了」再撤销，中间可能有一帧用宽列样式绘制 1187px 的聊天列
   // （1187 → 目标宽 → 1187 的可见抖动）。路由判定不依赖 DOM 时序，先做。
-  if (CHAT_ROUTE.test(window.location.pathname)) {
+  if (isChatRoute()) {
     disableTimelineLayout(row);
     return;
   }
@@ -372,6 +378,9 @@ export function enableTimelineWidth(): void {
   // SPA 导航（home / explore / 详情页切换）会重建主列子树、替换三栏行容器：
   // 路由切换是低频事件，直接重算一次即可，无需等 DOM 批次里发现存在性跃迁。
   onRouteChanged(() => scheduleLayout());
+  // 页面类型跃迁（尤其 /home → X Chat）同步重算一次：te:page 在 te:route 之后同帧派发，
+  // 不必再等一个 rAF —— 「聊天列先按宽列样式画一帧」的窗口就是从这里抢回来的。
+  onPageKindChanged(() => applyTimelineLayout());
 
   // 主列可能在任意时刻被 React 挂载 / 替换（SPA 导航），订阅共享 DOM 批次即可。
   // 判断采用「主列 / 右栏的存在性跃迁」+「行里右栏的有无」+「锚点节点身份变化

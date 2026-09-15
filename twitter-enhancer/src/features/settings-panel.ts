@@ -31,6 +31,9 @@ import { CONFIG } from '../config';
 import { getSettings, notifySettingsChanged, onSettingsChanged, type SettingItem } from '../lib/settings';
 import { onDomChanged } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
+import { waitForElement } from '../lib/wait-for';
+import { createStyleSheet } from '../lib/style-sheet';
+import { SEL } from '../lib/selectors';
 import './settings-panel.css';
 
 const ROOT_CLASS = 'te-settings-root';
@@ -38,19 +41,39 @@ const FAB_CLASS = 'te-settings-fab';
 const OVERLAY_CLASS = 'te-settings-overlay';
 /** 弹窗显隐属性（CSS 消费，同时是验证脚本的锚点） */
 const OPEN_ATTR = 'data-te-settings-open';
-/** 右下角悬浮抽屉容器：取它们中最高的上缘作为设置按钮的下边界 */
-const DRAWER_SELECTORS = ['[data-testid="GrokDrawer"]', '[data-testid="chat-drawer-root"]'];
+/** 右下角悬浮抽屉容器：取它们中最高的上缘作为设置按钮的下边界（稳定锚点见 lib/selectors.ts） */
+const DRAWER_SELECTORS = [SEL.grokDrawer, SEL.chatDrawer];
 /**
  * 外观镜像来源：X 自己的悬浮按钮 —— 收起态的 Grok 按钮（抽屉头就是那个 55×55 的按钮），
  * 其次是私信抽屉里的按钮。设置按钮与它们同列相邻，尺寸 / 圆角 / 描边阴影必须一致。
  */
-const LOOK_SOURCE_SELECTORS = [
-  '[data-testid="GrokDrawerHeader"]',
-  '[data-testid="chat-drawer-root"] button',
-];
+const LOOK_SOURCE_SELECTORS = [SEL.grokDrawerHeader, `${SEL.chatDrawer} button`];
 /** 镜像时的合理尺寸区间（px）：抽屉展开后同一 testid 会变成整条 350 宽的头，必须挡掉 */
 const FAB_MIN_SIZE = 40;
 const FAB_MAX_SIZE = 80;
+
+/**
+ * 设置按钮的**几何样式表**（运行时按 CONFIG 拼装，见 lib/style-sheet.ts）。
+ *
+ * 为什么是样式表而不是 CSS 文件里的常量：`right` / `bottom` / 尺寸 / 圆角 / 图标大小
+ * 与 `CONFIG.settings` 是同一份事实，写在两处必然漂 —— 这里由 config.ts 单向生成，
+ * 改配置即生效。它只在功能生效后才有意义，所以不存在首屏时序问题。
+ *
+ * 位置（right / bottom）仍会被 `anchorFab()` 用实测几何写成内联样式覆盖：
+ * 内联优先于样式表，这正是我们要的「先有兜底、再跟上 X 的实时位置」。
+ */
+const fabSheet = createStyleSheet('settings-fab');
+
+function renderFabSheet(): void {
+  const { right, fallbackBottom, fab } = CONFIG.settings;
+  fabSheet.set(
+    '.te-settings-fab{' +
+      `right:${right}px;bottom:${fallbackBottom}px;` +
+      `width:${fab.size}px;height:${fab.size}px;border-radius:${fab.radius}px;` +
+      `--te-set-fab-icon:${fab.iconSize}px;` +
+      '}',
+  );
+}
 
 /** 齿轮图标（自绘 SVG，不用 emoji，见设计规范） */
 const GEAR_ICON = `
@@ -79,15 +102,6 @@ const resizeObserver =
   typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => anchorFab()) : null;
 /** 当前被 ResizeObserver 观察的抽屉容器（X 换节点时重新绑定） */
 const observedDrawers = new Set<Element>();
-
-/** document-start 时 document.body 还不存在，等它就绪再执行 */
-function whenBody(run: () => void): void {
-  if (document.body) {
-    run();
-    return;
-  }
-  document.addEventListener('DOMContentLoaded', run, { once: true });
-}
 
 /* ------------------------------------------------------------------ *
  * 位置：右下角抽屉列的上缘
@@ -372,6 +386,9 @@ function closePanel(): void {
  * ------------------------------------------------------------------ */
 
 export function enableSettingsPanel(): void {
+  // 几何令牌先于挂载生成：按钮一进 DOM 就有正确尺寸（不依赖 X 的抽屉是否存在）
+  renderFabSheet();
+
   const mount = (): void => {
     // 根节点被 React 重挂 app shell 时连根删掉 → 整个重建（弹窗状态一并复位）
     if (!root?.isConnected) {
@@ -393,8 +410,11 @@ export function enableSettingsPanel(): void {
     anchorFab();
   };
 
-  // document-start 注入时 body 还没生成，whenBody 会等到 DOMContentLoaded 再挂载
-  whenBody(mount);
+  // document-start 注入时 body 还没有生成：用 waitForElement 等它（不用 DOMContentLoaded ——
+  // 脚本管理器可能在 DOMContentLoaded 之后才注入，那样回调永远不会触发）
+  void waitForElement('body', { name: 'document.body' }).then((body) => {
+    if (body) mount();
+  });
 
   // 右下角抽屉展开 / 收起、视口尺寸、SPA 导航、布局重算都会挪动锚点
   window.addEventListener('resize', anchorFab);

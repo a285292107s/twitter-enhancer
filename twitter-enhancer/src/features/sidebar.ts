@@ -23,27 +23,15 @@ import { registerSetting, notifySettingsChanged } from '../lib/settings';
 import { readFlag, writeFlag } from '../lib/store';
 import { onDomChanged, dispatchLayoutEvent } from '../lib/dom-watch';
 import { onRouteChanged } from '../lib/spa-route';
+import { SEL, NAV_SELECTORS, LOGO_SELECTORS, firstMatch } from '../lib/selectors';
+import { createObserverScope } from '../lib/observer-scope';
 import './sidebar.css';
 
-const SIDEBAR = '[data-testid="sidebarColumn"]';
-const SEARCH_INPUT = '[data-testid="SearchBox_Search_Input"]';
+/** 稳定锚点统一登记在 lib/selectors.ts（右栏 / 原生搜索框 / 导航条 / logo 的回退链） */
+const SIDEBAR = SEL.sidebarColumn;
+const SEARCH_INPUT = SEL.searchInput;
 /** 右栏左缘与主列右缘的间距：沿用 X 原生的 30px */
 const SIDEBAR_GAP = 30;
-/** 左侧导航条：不同版本结构略有差异，按优先级回退 */
-const NAV_SELECTORS = [
-  'nav[aria-label="Primary"]',
-  // 中文界面下 aria-label 是本地化文案
-  'nav[aria-label="主要"]',
-  'nav[role="navigation"]',
-  'header[role="banner"] nav',
-  '[data-testid="SideNav"]',
-];
-/** logo 链接：X 的 aria-label 随品牌调整，按优先级回退 */
-const LOGO_SELECTORS = [
-  'a[aria-label="X"]',
-  'a[aria-label="Twitter"]',
-  'a[href="/home"]',
-];
 /** 搜索框高度，用于与 logo 垂直居中对齐 */
 const SEARCH_HEIGHT = 44;
 /** 内栏宽度低于该值视为「图标条」，放不下输入框 */
@@ -61,11 +49,7 @@ const ROW_STYLE_PROPS = [
 ] as const;
 
 function findNav(): HTMLElement | null {
-  for (const selector of NAV_SELECTORS) {
-    const el = document.querySelector<HTMLElement>(selector);
-    if (el) return el;
-  }
-  return null;
+  return firstMatch<HTMLElement>(NAV_SELECTORS);
 }
 
 /**
@@ -382,12 +366,24 @@ function toggleSidebar(): void {
  * 内栏宽度变化（窗口缩放 / X 切换断点）时重新判定：
  * 收窄成图标条就隐藏搜索框，并重新决定用哪种布局。
  * 标记打在内栏上（而非导航条）——行内结构下宿主是 logo 行的子节点，不在 nav 里。
+ *
+ * 观察器走作用域（同名重登记会先断开旧的）：SPA 导航把内栏换成新节点时，
+ * 上一轮的 ResizeObserver 必须跟着断 —— 否则它永远盯着一棵脱离文档的子树，
+ * 而新内栏没人观察，图标条断点判定在导航后静默失效（旧实现的 `watching` 标志
+ * 正是这个缺陷：只认第一次挂载，之后再不重绑）。
  */
-function watchInner(inner: HTMLElement, nav: HTMLElement, host: HTMLElement): void {
+const scope = createObserverScope('sidebar');
+
+function watchInner(inner: HTMLElement): void {
   if (typeof ResizeObserver === 'undefined') return;
-  new ResizeObserver(() => {
-    mountBesideLogo(nav, host);
-  }).observe(inner);
+  const observer = new ResizeObserver(() => {
+    // 回调里重新解析导航条与宿主：这一轮观察可能跨过一次 SPA 导航
+    const nav = findNav();
+    const host = document.querySelector<HTMLElement>('.te-search-host');
+    if (nav && host) mountBesideLogo(nav, host);
+  });
+  observer.observe(inner);
+  scope.track('nav-inner', observer);
 }
 
 function isSearchEnabled(): boolean {
@@ -445,11 +441,15 @@ export function enableSidebarSearch(): void {
     if (stored !== null && stored !== searchEnabled) applySearchEnabled(stored);
   });
 
-  let watching = false;
+  /** 上一次观察过的内栏节点：只有它被 React 换掉时才重绑观察器（避免高频批次里反复重建） */
+  let watchedInner: HTMLElement | null = null;
   const sync = (): void => {
-    // 快速路径：宿主仍在位时只做廉价的校正，避免高频 mutation 下反复重建
+    // 快速路径：宿主仍在位、观察中的内栏也还在文档里时，只做廉价的校正，
+    // 避免高频 mutation 下反复重建。第二个条件是指标性的保险：宿主目前一定挂在内栏
+    // 子树内（logo 行或导航条），所以内栏被换掉时它必然一起消失 —— 但这条推理依赖
+    // 挂载点，写出来才不会在日后改挂载点时静默失效。
     const mounted = document.querySelector<HTMLElement>('.te-search-host');
-    if (mounted?.isConnected) {
+    if (mounted?.isConnected && watchedInner?.isConnected) {
       if (CONFIG.search.mode === 'move') moveNativeSearch(mounted);
       applySidebarGap();
       return;
@@ -468,9 +468,10 @@ export function enableSidebarSearch(): void {
     mountBesideLogo(nav, host);
     applySidebarGap();
 
-    if (!watching) {
-      watching = true;
-      watchInner(findInner(nav), nav, host);
+    const inner = findInner(nav);
+    if (inner !== watchedInner) {
+      watchedInner = inner;
+      watchInner(inner);
     }
   };
 
@@ -506,7 +507,7 @@ export function enableSidebarSearch(): void {
         break;
       }
       // 搜索宿主被移除后重新挂载，或原生搜索框重新出现（move 模式）
-      if (node.matches?.('.te-search-host, [data-testid="SearchBox_Search_Input"]')) {
+      if (node.matches?.(`.te-search-host, ${SEARCH_INPUT}`)) {
         relevant = true;
         break;
       }
