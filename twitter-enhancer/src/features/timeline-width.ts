@@ -116,6 +116,15 @@ const widenedByUs = new WeakSet<Element>();
 let unlocker: ReturnType<typeof createWidthUnlocker> | null = null;
 
 /**
+ * X 原生主列宽度（px，宽列生效前观测到的值）。
+ *
+ * 解锁器要抓的是「X 把列宽写死的那个值」，而那个值就是原生列宽本身 —— 与其在
+ * CONFIG 里写死 [560, 660]，不如把真实观测值传给它，判据跟着 X 的断点走。
+ * 只在「不是我们写过的宽度」时更新（见 writeTimelineLayout 里的读取点）。
+ */
+let nativeColumnWidth = 0;
+
+/**
  * 撤销宽列，交回 X 原生布局。四条路径共用：
  * 开关关闭 / 路由不是时间线（X Chat）/ X 没渲染三栏（Grok）/ 视口低于断点。
  *
@@ -243,10 +252,15 @@ function writeTimelineLayout(): void {
 
   // 本功能只负责放宽，从不收窄：页面原生就比目标宽（X 后续新增的非时间线页面）
   // 时原样交回。我们自己写过的主列不算「原生」（否则会自锁，见 widenedByUs 注释）。
-  if (
-    !widenedByUs.has(primary) &&
-    primary.getBoundingClientRect().width > target + WIDTH_GUARD_TOLERANCE
-  ) {
+  const primaryWidth = primary.getBoundingClientRect().width;
+  // 只有**我们自己的宽度覆盖没生效时**（data-te-timeline 不是 wide）读到的值才是 X 原生列宽。
+  // SPA 导航时上一页的 'wide' 还在，新主列一挂载就被 CSS 写成目标宽 —— 那一刻读到的
+  // 是脚本自己的输出，拿它当「原生列宽」会把解锁器判据挪到目标宽一带（实测 2026-09-14：
+  // 导航后时间线内容退回 600px，且一直坏到刷新）。见 architecture.md 的「禁止自反馈」。
+  if (root.dataset.teTimeline !== 'wide' && primaryWidth > 0) {
+    nativeColumnWidth = primaryWidth;
+  }
+  if (!widenedByUs.has(primary) && primaryWidth > target + WIDTH_GUARD_TOLERANCE) {
     disableTimelineLayout(row);
     return;
   }
@@ -321,6 +335,8 @@ export function enableTimelineWidth(): void {
   // 必须在首次 applyTimelineLayout 之前建好：布局收尾要同步它的门控。
   unlocker = createWidthUnlocker(PRIMARY_COLUMN, {
     lockedRange: CONFIG.lockedWidthRange,
+    // 主判据 = 原生列宽 ± 半宽（宽列生效前读到的那次），读不到时退回 CONFIG 区间
+    nativeWidth: () => nativeColumnWidth,
     isActive: () => document.documentElement.dataset.teTimeline === 'wide',
   });
   unlocker.start();
@@ -394,3 +410,4 @@ export function enableTimelineWidth(): void {
     toggle: toggleWide,
   });
 }
+

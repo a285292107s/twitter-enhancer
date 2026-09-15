@@ -10,9 +10,11 @@ export const CONFIG: {
   /** 是否默认开启「宽时间线」（开启后主列铺满内容区 / 右栏显示时放宽到上限） */
   timelineWide: boolean;
   /**
-   * 需要解除的「写死宽度」区间（px）。
-   * X 给时间线 / 推文容器写死了固定上限（当前为 600px），
-   * 落在该区间内且明显窄于主列的元素会被放开到 100%。
+   * 宽度解锁器的**兜底**锁宽区间（px）。
+   *
+   * 主判据不是这个区间，而是「X 原生列宽 ± 半宽（= (max-min)/2）」——原生列宽由
+   * `timeline-width.ts` 在宽列生效前实测后传给解锁器（实测 600），所以 X 改断点 /
+   * 改列宽时判据跟着走。这个常量只在**读不到**原生列宽时兜底。
    */
   lockedWidthRange: [number, number];
   /** 推文 UI 重设计（令牌与约束见 features/tweet-ui.css 头部，取值理由见 docs/design-notes.md） */
@@ -41,10 +43,51 @@ export const CONFIG: {
   media: {
     /** 是否默认开启（可在页内设置面板实时切换） */
     cap: boolean;
+    /**
+     * 单图超预算时的处理方式：
+     * fit —— 等比缩到预算内并水平居中（宽度跟着比例收缩，不裁不压扁，留白用 matte 衬底）；
+     * clamp —— 只压宿主高度，交给 X 自己的媒体盒子重排（旧行为，方图/横图会被压扁）。
+     * 2026-09-14 实测：/home 方图 900×895 在 980 宽列下被旧行为渲染成 896×540（比例 1.66）。
+     */
+    fit: boolean;
     /** 宿主识别宽度下限（px）：媒体祖先 ≥ 该宽才视为「整行媒体区」而非单格/单图 */
     lockWidth: number;
-    /** 媒体行最大显示高度（px）：超高媒体被钳到该值，整幅一屏内可看全 */
+    /**
+     * 媒体行最大显示高度（px）——**上限**，实际预算还要看视口：
+     * `budget = clamp(视口高 − chromeAllowance, minHeight, maxHeight)`。
+     *
+     * 2026-09-14 实测（1440 宽、4 图竖图轮播）重定这两个值：旧值 `min(540, vh−220)`
+     * 在小屏做不到一屏（视口 720 时给 500，帖子高 855、操作栏底边 771 出屏 51px），
+     * 在大屏又被 540 顶死（视口 1080/1400 时空着 300–600px 不用）。
+     * 现在按「焦点帖操作栏必须落在视口内」推导：媒体行之外上下共约 254px（实测 143+111），
+     * 再留 ~50px 给更长的正文，故取 `vh − 320`；上限 700 允许高屏/竖屏拿到更大的图
+     *（轮播格宽 ≈ 行高 × 格比例，700 行高 → 格宽 383 > X 原生 600 列下的 356）。
+     * 注意 X 原生 600 列的轮播行高是 650（每格 356 宽）—— 在 900 视口下要给到 650
+     * 就会让操作栏出屏，这是「一屏看全」的硬取舍点，不是实现问题。
+     */
     maxHeight: number;
+    /** 预算里留给「媒体行之外的帖子部分（顶栏 + 作者行 + 正文 + 元信息 + 操作栏）」的高度（px） */
+    chromeAllowance: number;
+    /** 预算下限（px）：视口极矮时仍保证媒体可见 */
+    minHeight: number;
+  };
+  /**
+   * 内容列排版（详见 features/content-column.ts 与 docs/content-column-design.md）。
+   * 只锚定 data-testid / 自身写入的属性，只写属性不搬节点。
+   */
+  column: {
+    /** 是否默认开启 */
+    enabledByDefault: boolean;
+    /** 操作栏图标成组后的组内间距（px）：764 版心内 6 个图标不拥挤 */
+    actionGap: number;
+    /** 「短文案」阈值：可见字符数 ≤ 该值时按 lede 排版（emoji 记 0 字符，单独归类） */
+    shortMaxChars: number;
+    /** emoji 独占正文时的字号（px）：当标题行用，不是段落 */
+    emojiFontSize: number;
+    /** 短文案字号（px）：当导语用 */
+    shortFontSize: number;
+    /** 多图轮播在媒体右上角显示「3/4」序号 */
+    carouselIndex: boolean;
   };
   /** 搜索框迁移到左侧导航条 */
   search: {
@@ -97,8 +140,19 @@ export const CONFIG: {
   },
   media: {
     cap: true,
+    fit: true,
     lockWidth: 566,
-    maxHeight: 540,
+    maxHeight: 700,
+    chromeAllowance: 320,
+    minHeight: 320,
+  },
+  column: {
+    enabledByDefault: true,
+    actionGap: 32,
+    shortMaxChars: 32,
+    emojiFontSize: 24,
+    shortFontSize: 20,
+    carouselIndex: true,
   },
   search: {
     enabled: true,

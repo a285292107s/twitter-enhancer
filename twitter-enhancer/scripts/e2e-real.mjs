@@ -351,9 +351,8 @@ ${bundle}
       cell.appendChild(host);
     });
 
-    const budget = await page.evaluate(
-      () => Math.max(120, Math.min(540, window.innerHeight - 220)),
-    );
+    // 预算由功能自己公布（单一事实来源），测试不再复算公式
+    const budget = await page.evaluate(() => Number(document.documentElement.dataset.teMediaBudget));
     const clamped = await page
       .waitForFunction(
         (b) => {
@@ -388,6 +387,302 @@ ${bundle}
       .then(() => true)
       .catch(() => false);
     expect('媒体回落预算内后自动解锁', unlocked, true);
+
+    /* ============ 3b. 内容列排版：版心 / 语义分类 / 轮播序号（真实计算样式） ============ */
+    // 这些改动是「属性 + CSS」，jsdom 只能验属性（scripts/verify.mjs），
+    // 计算样式必须在真实布局里量：版心宽度、图标组间距、轮播切片圆角。
+    await page.evaluate(() => {
+      const cell = document.querySelector('[data-testid="cellInnerDiv"]');
+      if (!cell) throw new Error('页面没有 cellInnerDiv，无法注入合成推文');
+      const svg = (w, h) =>
+        `data:image/svg+xml,${encodeURIComponent(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"></svg>`,
+        )}`;
+      const article = document.createElement('article');
+      article.setAttribute('data-testid', 'tweet');
+      article.id = 'te-e2e-tweet';
+      // 正文只放一个 emoji 式 <img>（真机里 emoji 就是行内 img，textContent 长度为 0）
+      const name = document.createElement('div');
+      name.setAttribute('data-testid', 'User-Name');
+      name.textContent = '合成作者';
+      const text = document.createElement('div');
+      text.setAttribute('data-testid', 'tweetText');
+      const emoji = document.createElement('img');
+      emoji.src = svg(20, 20);
+      text.appendChild(emoji);
+      const row = document.createElement('div');
+      row.id = 'te-e2e-row';
+      row.style.width = '100%';
+      const list = document.createElement('div');
+      list.setAttribute('data-testid', 'ScrollSnap-List');
+      list.style.cssText = 'display:flex;gap:4px;width:100%';
+      for (let i = 0; i < 2; i += 1) {
+        const tile = document.createElement('div');
+        tile.setAttribute('data-testid', 'tweetPhoto');
+        tile.style.cssText = 'flex:0 0 auto;width:291px;height:534px;background:#ccc';
+        list.appendChild(tile);
+      }
+      row.appendChild(list);
+      const actions = document.createElement('div');
+      actions.id = 'te-e2e-actions';
+      actions.setAttribute('role', 'group');
+      actions.style.display = 'flex';
+      for (const id of ['reply', 'retweet', 'like', 'views', 'bookmark', 'share']) {
+        const item = document.createElement('div');
+        item.setAttribute('data-testid', id);
+        // 与 X 一致：按钮是 flex:1 1 0% 的等距分布（见 content-column.css 的说明）
+        item.style.flex = '1 1 0%';
+        actions.appendChild(item);
+      }
+      article.append(name, text, row, actions);
+      cell.appendChild(article);
+    });
+
+    const columnReady = await page
+      .waitForFunction(
+        () => {
+          const article = document.getElementById('te-e2e-tweet');
+          const row = document.getElementById('te-e2e-row');
+          return !!article && article.dataset.teCaption === 'emoji' && row?.dataset.teCarousel === '1/2';
+        },
+        null,
+        { timeout: 10000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    expect('合成推文被识别为 emoji 正文并写出轮播序号', columnReady, true);
+
+    const columnState = await page.evaluate(() => {
+      const article = document.getElementById('te-e2e-tweet');
+      const tile = document.querySelector('#te-e2e-row [data-testid="tweetPhoto"]');
+      // 版心断言用真实推文的操作栏：合成推文缺少 X 的包裹结构，宽度是收缩值。
+      // 只看主列里的推文并取最宽的一条 —— 通知 / 挂件里也有 article，宽度不是列宽。
+      const realGroups = [...document.querySelectorAll(
+        '[data-testid="primaryColumn"] article[data-testid="tweet"]:not(#te-e2e-tweet) [role="group"]',
+      )];
+      const realGroup = realGroups.sort(
+        (a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width,
+      )[0];
+      return {
+        caption: article?.dataset.teCaption,
+        carousel: document.getElementById('te-e2e-row')?.dataset.teCarousel,
+        realGroupMaxWidth: realGroup ? getComputedStyle(realGroup).maxWidth : null,
+        realGroupGap: realGroup ? getComputedStyle(realGroup).columnGap : null,
+        spineToken: getComputedStyle(document.documentElement).getPropertyValue('--te-spine').trim(),
+        tileRadius: tile ? getComputedStyle(tile).borderTopLeftRadius : null,
+      };
+    });
+    // 版心 = 正文 72ch 的解析结果（16px Chirp 实测 763.776 → 764）
+    expect('版心令牌取自正文 72ch 的解析值', columnState.spineToken, '764px');
+    expect('版心真的落到操作栏上', columnState.realGroupMaxWidth, '764px');
+    expect('操作栏组内间距令牌生效（32px）', columnState.realGroupGap, '32px');
+    // 轮播切片直角：X 原生把「一块媒体」切 4 片，逐片 16px 圆角会读成 4 张卡
+    expect('轮播切片不给圆角（媒体读作一块）', columnState.tileRadius, '0px');
+    // 轮播切片直角：X 原生把「一块媒体」切 4 片，逐片 16px 圆角会读成 4 张卡
+    expect('轮播切片不给圆角（媒体读作一块）', columnState.tileRadius, '0px');
+
+    /* ============ 3c. 单图等比（fit）：方图不被压扁 ============ */
+    // 真机缺陷：X 用百分比 padding 比例盒铺满列宽，只压宿主高度会把方图压成 1.66:1。
+    // fit 模式按预算高度等比缩宽度（400×300 的原图 → 540×405 等比，这里预算 540）。
+    await page.evaluate(() => {
+      const cell = document.querySelector('[data-testid="cellInnerDiv"]');
+      const svg = `data:image/svg+xml,${encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"></svg>',
+      )}`;
+      const host = document.createElement('div');
+      host.id = 'te-e2e-fit-host';
+      host.style.width = '896px';
+      host.style.aspectRatio = '896 / 891'; // 自然高 891 > 预算 → 会被钳制
+      const photo = document.createElement('div');
+      photo.id = 'te-e2e-fit-photo';
+      photo.setAttribute('data-testid', 'tweetPhoto');
+      photo.style.cssText = 'width:100%;height:100%';
+      const img = document.createElement('img');
+      img.src = svg;
+      img.style.cssText = 'width:100%;height:100%';
+      photo.appendChild(img);
+      host.appendChild(photo);
+      // 外面再套一层「纯媒体包裹」：真机上被钳制的是一整条链，
+      // 用户看到的「比图片大的容器」正是链上更外层的那一层
+      const wrap = document.createElement('div');
+      wrap.id = 'te-e2e-fit-wrap';
+      wrap.style.width = '100%';
+      wrap.appendChild(host);
+      cell.appendChild(wrap);
+    });
+
+    const fitted = await page
+      .waitForFunction(
+        (b) => {
+          const photo = document.getElementById('te-e2e-fit-photo');
+          return !!photo && photo.dataset.teMediaFit === '1' && photo.style.height === `${b}px`;
+        },
+        budget,
+        { timeout: 10000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    expect('超预算单图进入等比模式', fitted, true);
+    const fitState = await page.evaluate(() => {
+      const host = document.getElementById('te-e2e-fit-host');
+      const wrap = document.getElementById('te-e2e-fit-wrap');
+      const photo = document.getElementById('te-e2e-fit-photo');
+      const rect = photo?.getBoundingClientRect();
+      const hostRect = host?.getBoundingClientRect();
+      // 对照组：不在 fit 子树里、宽度落在锁宽区间（560–660）的容器 —— 解锁器仍要放开它
+      return {
+        hostFlag: host?.dataset.teMediaFit,
+        photoFlag: photo?.dataset.teMediaFit,
+        wrapFlag: wrap?.dataset.teMediaFit,
+        inlineWidth: photo?.style.width,
+        inlineHeight: photo?.style.height,
+        hostInlineWidth: host?.style.width,
+        hostWidth: hostRect ? Math.round(hostRect.width) : null,
+        wrapWidth: wrap ? Math.round(wrap.getBoundingClientRect().width) : null,
+        hostUnlocked: host?.dataset.teWidthUnlocked ?? null,
+        photoUnlocked: photo?.dataset.teWidthUnlocked ?? null,
+        renderedAspect: rect && rect.height > 0 ? Number((rect.width / rect.height).toFixed(3)) : null,
+      };
+    });
+    expect(
+      'fit 标记打在整条媒体链上（解锁器据此放过它们）',
+      `${fitState.wrapFlag}/${fitState.hostFlag}/${fitState.photoFlag}`,
+      '1/1/1',
+    );
+    expect(
+      '图片容器按原图比例缩到预算内（400×300 → 4/3 × 预算）',
+      `${fitState.inlineWidth}×${fitState.inlineHeight}`,
+      `${Math.round((budget * 400) / 300)}px×${budget}px`,
+    );
+    expect('渲染比例与原图一致（1.333，不再被压扁）', fitState.renderedAspect, 1.333);
+    // 608px 这类「由媒体比例算出的宽度」会落进锁宽区间 560–660：
+    // 被解锁器判成写死容器后宽会被顶回整列、高仍是我们设的预算 → 图片横向拉伸。
+    const fitWidth = Math.round((budget * 400) / 300);
+    expect('宿主收到与图片同宽（容器不再比图片大）', fitState.hostInlineWidth, `${fitWidth}px`);
+    expect('渲染后的宿主宽度确实收到等比宽度', fitState.hostWidth, fitWidth);
+    // 用户实测反馈的那一层：链上更外层的包裹也必须跟着收
+    expect('外层包裹也收到图片宽度（没有比图片大的盒子）', fitState.wrapWidth, fitWidth);
+    expect(
+      '解锁器不打 fit 过的宿主 / 图片（宽度是媒体比例，不是容器上限）',
+      `${fitState.hostUnlocked}/${fitState.photoUnlocked}`,
+      'null/null',
+    );
+
+    /* ---- 3d. 窄媒体被 X 逐层 shrink-wrap：中间包裹层同样要钉住 ---- */
+    // 真机缺陷（2026-09-14，Ford_R_plus 竖长单图 292×680）：X 把竖长图 letterbox 到 510 高
+    // （宽只剩 219），媒体列每一层包裹都窄于 lockWidth —— findHost 抬到整行才命中宿主，
+    // 中间包裹层落在宿主内部、逃出 run；只钉宿主与媒体会让图片溢出容器右下方。
+    // 同一形态的第二层约束来自 X 的内联 `max-width`（= 510 × 固有比例，它自己高度上限的
+    // 伪装）：/home 一条 1000×1339 的竖图帖上我们写 width:433px、max-width:380.8px 把它卡在
+    // 381，图片比容器宽 52px。所以这里按同一张图（1000×1339 / max-width 380.8）复现。
+    await page.evaluate(() => {
+      const svg = `data:image/svg+xml,${encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1339"></svg>',
+      )}`;
+      const cell = document.querySelector('[data-testid="cellInnerDiv"]');
+      const host = document.createElement('div');
+      host.id = 'te-e2e-shrink-host';
+      host.style.width = '896px';
+      host.style.aspectRatio = '896 / 891';
+      const card = document.createElement('div');
+      card.id = 'te-e2e-shrink-card';
+      card.style.cssText = 'width: 380.8px; height: 510px; max-width: 380.8px';
+      const photo = document.createElement('div');
+      photo.id = 'te-e2e-shrink-photo';
+      photo.setAttribute('data-testid', 'tweetPhoto');
+      photo.style.cssText = 'width:100%;height:100%';
+      const img = document.createElement('img');
+      img.src = svg;
+      img.style.cssText = 'width:100%;height:100%';
+      photo.appendChild(img);
+      card.appendChild(photo);
+      host.appendChild(card);
+      cell.appendChild(host);
+    });
+    const shrinkFitted = await page
+      .waitForFunction(
+        () => document.getElementById('te-e2e-shrink-photo')?.dataset.teMediaFit === '1',
+        null,
+        { timeout: 10000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    expect('窄包裹层隔开宿主时仍进入等比', shrinkFitted, true);
+    const shrinkState = await page.evaluate(() => {
+      const [host, card, photo] = ['te-e2e-shrink-host', 'te-e2e-shrink-card', 'te-e2e-shrink-photo'].map(
+        (id) => document.getElementById(id),
+      );
+      const size = (el) => {
+        const rect = el?.getBoundingClientRect();
+        return rect ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : 'null';
+      };
+      return {
+        flags: `${host?.dataset.teMediaFit}/${card?.dataset.teMediaFit}/${photo?.dataset.teMediaFit}`,
+        host: size(host),
+        card: size(card),
+        photo: size(photo),
+        cardMaxWidth: card ? getComputedStyle(card).maxWidth : null,
+        // 图片是否溢出中间包裹层（旧行为：卡片被 max-width 卡在 381、图片 433）
+        cardOverflowX: card ? card.scrollWidth - card.clientWidth : null,
+        cardOverflowY: card ? card.scrollHeight - card.clientHeight : null,
+      };
+    });
+    const shrinkWidth = Math.round((budget * 1000) / 1339);
+    expect(
+      '中间包裹层也打上 fit 标记（解锁器与解锁路径都覆盖到）',
+      shrinkState.flags,
+      '1/1/1',
+    );
+    expect(
+      '渲染尺寸闭合：宿主 / 窄包裹层 / 图片三者同宽同高（不再溢出容器）',
+      `${shrinkState.host}|${shrinkState.card}|${shrinkState.photo}`,
+      Array(3).fill(`${shrinkWidth}x${budget}`).join('|'),
+    );
+    expect('X 用来伪装高度上限的 max-width 被解除', shrinkState.cardMaxWidth, 'none');
+    expect(
+      '图片没有溢出中间包裹层（旧行为：卡片被卡在 381、图片 433）',
+      `${shrinkState.cardOverflowX}/${shrinkState.cardOverflowY}`,
+      '0/0',
+    );
+    // 清掉注入节点，避免影响后面的 SPA 导航几何断言
+    await page.evaluate(() => {
+      for (const id of [
+        'te-e2e-tweet',
+        'te-e2e-fit-wrap',
+        'te-e2e-fit-host',
+        'te-e2e-host',
+        'te-e2e-shrink-host',
+        'te-e2e-shrink-card',
+        'te-e2e-shrink-photo',
+      ]) {
+        document.getElementById(id)?.remove();
+      }
+    });
+    // 版心宽度在注入节点清理后量：合成推文与真推文同处一个 cellInnerDiv 时，
+    // X 的 flex 包裹会让真推文操作栏变成收缩宽度（实测 520px），不是真实观感。
+    // 清理会触发 X 重排，所以等它稳定到版心宽度再断言（超时即视为没生效）。
+    const spineWidth = await page
+      .waitForFunction(
+        () => {
+          const groups = [
+            ...document.querySelectorAll(
+              '[data-testid="primaryColumn"] article[data-testid="tweet"] [role="group"]',
+            ),
+          ];
+          if (groups.length === 0) return null;
+          const widest = Math.max(...groups.map((group) => group.getBoundingClientRect().width));
+          return widest > 700 ? Math.round(widest) : null;
+        },
+        null,
+        { timeout: 8000 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => null);
+    expect(
+      `真实推文的操作栏收进版心（实测 ${spineWidth}px，整列 946px）`,
+      spineWidth !== null && spineWidth > 700 && spineWidth < 790,
+      true,
+    );
 
     /* ============ 4. tab 切换 /home ↔ /i/grok：主区几何逐帧不变 ============ */
     // 这是本功能的验收核心：X 的 /i/grok 只是「把右栏那一份横向空间让给主列」——
@@ -571,7 +866,7 @@ ${bundle}
     });
     expect('点击设置按钮打开弹窗', opened.open, 'true');
     expect('弹窗真的显示（display:flex）', opened.display, 'flex');
-    expect('弹窗里渲染出 5 个开关', opened.rows, 5);
+    expect('弹窗里渲染出 7 个开关', opened.rows, 7);
     expect('弹窗宽度不超过 420px 且已居中', opened.width > 0 && opened.width <= 420, true);
 
     // 弹窗里的开关必须真的改变布局：点「显示右侧栏」→ 右栏从隐藏变可见
@@ -609,6 +904,104 @@ ${bundle}
       return document.documentElement.dataset.teSidebar;
     });
     expect('再次点击开关把右栏切回隐藏', restored, 'off');
+
+    /* ============ 5b. SPA 导航到另一个三栏页：内容列不得退回 600px ============ */
+    // 真机缺陷（2026-09-14 用户实测「时间线内容又变回 600 宽」）：SPA 导航时上一页的
+    // data-te-timeline='wide' 还在，新主列一挂载就被 CSS 写成目标宽 —— 若此刻去
+    // 「实测原生列宽」，读到的是脚本自己的输出，解锁器判据区间被挪到目标宽一带，
+    // 列容器不再被放开 → 内容退回 600px，且一直坏到整页刷新。
+    const profilePath = await page.evaluate(() => {
+      const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+      return link ? new URL(link.getAttribute('href'), location.origin).pathname : null;
+    });
+    const contentWidth = () =>
+      page
+        .waitForFunction(
+          () => {
+            const widths = [
+              ...document.querySelectorAll('[data-testid="cellInnerDiv"], article[data-testid="tweet"]'),
+            ].map((el) => el.getBoundingClientRect().width);
+            const widest = widths.length ? Math.max(...widths) : 0;
+            return widest > 900 ? Math.round(widest) : null;
+          },
+          null,
+          { timeout: 8000 },
+        )
+        .then((handle) => handle.jsonValue())
+        .catch(() => null);
+    if (!profilePath) {
+      expect('左栏取到个人资料链接（用于 SPA 导航验证）', false, true);
+    } else {
+      const toProfile = (await clickRailLink(profilePath)) && (await waitPath(profilePath));
+      expect('左栏「个人资料」可点开（SPA 导航）', toProfile, true);
+      const profileWidth = await contentWidth();
+      expect(
+        `SPA 到个人资料后内容列仍是宽列（实测 ${profileWidth}px，退回 600 即此项失败）`,
+        profileWidth !== null && profileWidth > 900,
+        true,
+      );
+      const unlockedAfterNav = await page.evaluate(
+        () => document.querySelectorAll('[data-te-width-unlocked]').length,
+      );
+      expect('SPA 导航后解锁器仍在放开列容器', unlockedAfterNav > 0, true);
+
+      const backHome = (await clickRailLink('/home')) && (await waitPath('/home'));
+      expect('SPA 回到 /home 成功', backHome, true);
+      const homeWidth = await contentWidth();
+      expect(`回到 /home 后内容列仍是宽列（实测 ${homeWidth}px）`, homeWidth !== null && homeWidth > 900, true);
+    }
+
+    /* ============ 6. 详情页：焦点帖标记与 Hero 分隔（真实 URL 判定） ============ */
+    // 焦点帖靠「article 里有 a[href] 的路径 === location.pathname」判定，
+    // 这一条只有在真详情页才能验：URL 从当前时间线里现取一条推文，避免写死推文 ID。
+    const statusPath = await page.evaluate(() => {
+      // 只认「纯」帖子路径：媒体帖里第一个 /status/ 链接往往带 /photo/1 后缀，
+      // 用它导航会落到图片浮层，location.pathname 与焦点帖判据对不上（曾在此静默失败）。
+      const links = [
+        ...document.querySelectorAll(
+          '[data-testid="primaryColumn"] article[data-testid="tweet"] a[href*="/status/"]',
+        ),
+      ];
+      for (const anchor of links) {
+        const pathname = new URL(anchor.getAttribute('href'), location.origin).pathname;
+        if (/^\/[^/]+\/status\/\d+$/.test(pathname)) return pathname;
+      }
+      return null;
+    });
+    if (!statusPath) {
+      expect('时间线里取到一条推文用于详情页验证', false, true);
+    } else {
+      await page.goto(`https://x.com${statusPath}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      const heroReady = await page
+        .waitForFunction(() => document.querySelectorAll('[data-te-hero]').length > 0, null, { timeout: 30000 })
+        .then(() => true)
+        .catch(() => false);
+      expect('详情页焦点帖被标记（data-te-hero）', heroReady, true);
+      const heroState = await page.evaluate(() => {
+        const heroes = [...document.querySelectorAll('article[data-te-hero]')];
+        const hero = heroes[0];
+        const cell = hero?.closest('[data-testid="cellInnerDiv"]');
+        const after = hero ? getComputedStyle(hero, '::after') : null;
+        return {
+          count: heroes.length,
+          heroCell: cell?.dataset.teHeroCell,
+          caption: hero?.dataset.teCaption,
+          border: cell ? getComputedStyle(cell).borderBottomColor : null,
+          bandHeight: after?.height,
+          paddingTop: hero ? getComputedStyle(hero).paddingTop : null,
+        };
+      });
+      expect('焦点帖只有一条（回复不被误标）', heroState.count, 1);
+      expect('焦点帖所在的单元格被标记', heroState.heroCell, '1');
+      expect(
+        '焦点帖正文被分类',
+        ['none', 'emoji', 'short', 'long'].includes(String(heroState.caption)),
+        true,
+      );
+      expect('焦点帖下边界线被去掉（改用结构色带分隔）', heroState.border, 'rgba(0, 0, 0, 0)');
+      expect('Hero 结尾色带高度 8px', heroState.bandHeight, '8px');
+      expect('焦点帖上内边距比回复松（20px）', heroState.paddingTop, '20px');
+    }
   } finally {
     await context.close();
   }
@@ -628,3 +1021,4 @@ run()
     console.log(failed === 0 ? `\n真机 E2E 全部通过（${results.length} 项）` : `\n${failed} 项失败`);
     process.exit(failed === 0 ? 0 : 1);
   });
+

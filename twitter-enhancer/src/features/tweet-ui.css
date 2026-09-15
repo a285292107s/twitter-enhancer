@@ -10,11 +10,13 @@
 
 /* ===== 设计令牌：亮色（默认） ===== */
 :root {
-  --te-space-1: 4px;
-  --te-space-2: 8px;
-  --te-space-3: 12px;
-  --te-space-4: 16px;
-  --te-space-6: 24px;
+  /* 层级间距梯：全站只用这五档（内容列排版同样只从这里取值）。
+     单元格内边距不在此列 —— 那些是 X 的实测值，写在各自规则里。 */
+  --te-gap-1: 8px; /* 元素内部（图标与计数） */
+  --te-gap-2: 12px; /* 行内块之间 */
+  --te-gap-3: 20px; /* 段落之间 */
+  --te-gap-4: 32px; /* 区块之间 */
+  --te-gap-5: 56px; /* 章节之间 */
 
   --te-body-size: 16px;
   --te-body-lh: 1.5;
@@ -25,6 +27,8 @@
   --te-border: rgba(0, 0, 0, 0.08);
   --te-hover: rgba(0, 0, 0, 0.03);
   --te-quote-hover: rgba(0, 0, 0, 0.02);
+  /* 结构分隔色带：焦点帖与会话区之间（不是卡片阴影） */
+  --te-surface-sunken: rgba(0, 0, 0, 0.035);
 
   --te-color-reply: #1d9bf0;
   --te-tint-reply: rgba(29, 155, 240, 0.1);
@@ -46,6 +50,7 @@ html[data-te-theme='dim'] {
   --te-border: rgba(255, 255, 255, 0.09);
   --te-hover: rgba(255, 255, 255, 0.03);
   --te-quote-hover: rgba(255, 255, 255, 0.02);
+  --te-surface-sunken: rgba(255, 255, 255, 0.045);
 }
 
 /* ===== 设计令牌：Dark（纯黑） ===== */
@@ -55,6 +60,7 @@ html[data-te-theme='dark'] {
   --te-border: rgba(255, 255, 255, 0.1);
   --te-hover: rgba(255, 255, 255, 0.04);
   --te-quote-hover: rgba(255, 255, 255, 0.03);
+  --te-surface-sunken: rgba(255, 255, 255, 0.05);
 }
 
 /* ============================================================
@@ -67,7 +73,8 @@ html[data-te-ui='on'] [data-testid='cellInnerDiv'] {
 }
 
 html[data-te-ui='on'] article[data-testid='tweet'] {
-  padding: var(--te-space-3) var(--te-space-4) var(--te-space-2);
+  /* 12 / 16 / 8：X 原生单元格的实测内边距，不参与层级间距梯 */
+  padding: 12px 16px 8px;
 }
 
 /* --- 排版：正文字号 / 行高 / 行长 --- */
@@ -96,7 +103,7 @@ html[data-te-ui='on'] [data-testid='User-Name'] span:last-child {
 
 /* --- 正文与操作栏的间距 --- */
 html[data-te-ui='on'] [data-testid='tweet'] [role='group'] {
-  margin-top: var(--te-space-2);
+  margin-top: var(--te-gap-2);
 }
 
 /* --- 操作栏：命中区域、语义色、状态反馈 --- */
@@ -176,29 +183,30 @@ html[data-te-ui='on'] [data-testid='unlike']:hover > div {
   background-color: var(--te-tint-like);
 }
 
-/* --- 媒体：圆角 + 暗色下的 hairline 边界 --- */
+/* --- 媒体：不描边、不逐片圆角，交给 X 自己的「块」 ---
+   2026-09-14 实测（焦点帖 4 图轮播，980 列）：
+   - X 原生：切片 [data-testid=tweetPhoto] 圆角 0，上一层包裹 8px + overflow:hidden，
+     ScrollSnap-List 0 —— 一整块媒体被切成 4 片；
+   - 旧版本给每片套 16px 圆角 + 6px 缝，眼睛读到的是「4 张卡」，是视觉倒退。
+   所以这里只保留 overflow:hidden，圆角与暗色描边一律还给 X / 移除。 */
 html[data-te-ui='on'] [data-testid='tweetPhoto'],
 html[data-te-ui='on'] [data-testid='videoPlayer'],
 html[data-te-ui='on'] [data-testid='card.layoutLarge.media'] {
-  border-radius: var(--te-radius);
   overflow: hidden;
 }
 
-html[data-te-theme='dim'] [data-te-ui='on'] [data-testid='tweetPhoto'],
-html[data-te-theme='dark'] [data-te-ui='on'] [data-testid='tweetPhoto'],
-html[data-te-theme='dim'] [data-te-ui='on'] [data-testid='videoPlayer'],
-html[data-te-theme='dark'] [data-te-ui='on'] [data-testid='videoPlayer'],
-html[data-te-theme='dim'] [data-te-ui='on'] [data-testid='card.layoutLarge.media'],
-html[data-te-theme='dark'] [data-te-ui='on'] [data-testid='card.layoutLarge.media'] {
-  border: 1px solid var(--te-border);
+/* 轮播切片：即便 X 以后给切片加了圆角/描边，也按「一块媒体」处理 */
+html[data-te-ui='on'] article [data-testid='ScrollSnap-List'] [data-testid='tweetPhoto'] {
+  border-radius: 0;
+  border: 0;
 }
 
 /* --- 引用推文：转为卡片，明确可点击区域 --- */
 html[data-te-ui='on'] [data-testid='tweet'] div[role='link'] {
   border: 1px solid var(--te-border);
   border-radius: var(--te-radius);
-  padding: var(--te-space-3);
-  margin-top: var(--te-space-3);
+  padding: var(--te-gap-2);
+  margin-top: var(--te-gap-2);
   transition: background-color var(--te-dur) var(--te-ease);
 }
 

@@ -27,7 +27,9 @@ const HTML = `<!doctype html><html><head></head><body>
     <div data-testid="primaryColumn" style="width:800px">
       <div style="width:100%">
         <div id="timeline" style="max-width:600px">
-          <div id="tweet" style="width:600px">tweet body</div>
+          <div data-testid="cellInnerDiv">
+            <div id="tweet" style="width:600px">tweet body</div>
+          </div>
           <div id="avatar" style="width:48px">avatar</div>
         </div>
       </div>
@@ -43,6 +45,8 @@ const expect = (name, actual, wanted) => {
   results.push({ name, actual, wanted, ok: Object.is(actual, wanted) });
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** 功能公布的高度预算（单一事实来源：别在测试里复算 media-cap 的公式） */
+const budgetOf = (window) => Number(window.document.documentElement.dataset.teMediaBudget);
 
 function createWindow(html = HTML, url = 'https://x.com/home') {
   const virtualConsole = new VirtualConsole();
@@ -166,8 +170,11 @@ w1.eval(script);
 await sleep(120);
 
 const q = (id) => w1.document.getElementById(id);
-expect('timeline（max-width:600px）应被解锁', q('timeline').dataset.teWidthUnlocked, 'max');
-expect('tweet（width:600px）应被解锁', q('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('时间线容器（max-width:600px，内含 cellInnerDiv）应被解锁', q('timeline').dataset.teWidthUnlocked, 'max');
+// 角色判据：推文内部的盒子（宽度也是 600）不再算「X 写死的列宽上限」。
+// 实测（2026-09-14，/home + 详情页）：解锁器真正命中的只有「承载内容单元的容器」；
+// 一条推特内部的 600px 盒子放开只会把内容拉变形（轮播格 562px 就是这么被拉宽的）。
+expect('推文内部的 600px 盒子不再被解锁（按角色，不按尺寸）', q('tweet').dataset.teWidthUnlocked, undefined);
 expect('avatar（48px）不应被误伤', q('avatar').dataset.teWidthUnlocked, undefined);
 // 右栏隐藏时主列铺满 X 内容区：行宽 1050 − 右栏保留的右边距 70 = 980
 // （1440 视口实测，与 /i/grok 的原生主列同宽同左缘）
@@ -328,11 +335,11 @@ expect('弹窗带对话框语义', dialog5?.getAttribute('role'), 'dialog');
 expect('弹窗标题为「设置」', w5.document.getElementById('te-settings-title')?.textContent, '设置');
 
 const rows5 = [...w5.document.querySelectorAll('.te-settings-row')];
-expect('四个功能共登记五个开关', rows5.length, 5);
+expect('五个功能共登记七个开关', rows5.length, 7);
 expect(
-  '开关顺序为 布局三项 + 内容两项',
+  '开关顺序为 布局三项 + 内容四项',
   rows5.map((row) => row.dataset.teSetting).join(','),
-  'timeline-wide,sidebar,nav-search,tweet-ui,media-cap',
+  'timeline-wide,sidebar,nav-search,tweet-ui,media-cap,media-fit,content-column',
 );
 expect(
   '同组开关合并到一个小标题下',
@@ -341,6 +348,8 @@ expect(
 );
 expect('宽时间线开关初始为开', settingState(w5, 'timeline-wide'), 'true');
 expect('显示右侧栏开关初始为关（右栏默认隐藏）', settingState(w5, 'sidebar'), 'false');
+expect('内容列排版开关初始为开', settingState(w5, 'content-column'), 'true');
+expect('单图等比开关初始为开', settingState(w5, 'media-fit'), 'true');
 expect('开关的可访问角色为 switch', rows5[0].querySelector('.te-settings-switch')?.getAttribute('role'), 'switch');
 
 // 点击开关 → 功能生效 + 面板状态刷新
@@ -542,7 +551,8 @@ expect('透明背景回退系统偏好而非误判暗色', theme15 === 'dark', f
 expect('透明背景下主题已写入（light）', theme15, 'light');
 
 // ================= 实例十七：滚动新增的写死宽度容器被增量解锁 =================
-// 初始容器内已解锁；模拟 React 无限加载追加一条写死 600px 的新推文。
+// 初始容器内已解锁；模拟 React 无限加载追加一节写死 600px 的新内容容器
+// （内含内容单元，才符合「列容器」的角色）。
 // 增量路径应识别并打上标记（无需整树重扫旧节点）。
 const w18 = createWindow();
 w18.eval(script);
@@ -551,11 +561,11 @@ const timeline18 = w18.document.getElementById('timeline');
 const lateLocked = w18.document.createElement('div');
 lateLocked.id = 'lateLocked';
 lateLocked.style.width = '600px';
-lateLocked.textContent = 'late tweet';
+lateLocked.innerHTML = '<div data-testid="cellInnerDiv">late tweet</div>';
 timeline18.appendChild(lateLocked);
 await sleep(200); // 等 dom-watch 合并 + rAF 时间片
-expect('滚动新增的 600px 容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
-expect('既有解锁标记未被打乱', w18.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('滚动新增的 600px 内容容器被解锁', lateLocked.dataset.teWidthUnlocked, 'fixed');
+expect('既有解锁标记未被打乱', timeline18.dataset.teWidthUnlocked, 'max');
 
 // ================= 实例十一：SPA 导航后布局自动重算（渲染帧前） =================
 // X 是 React SPA，站内导航不触发 load；脚本通过 hook history.pushState 广播 te:route。
@@ -631,7 +641,7 @@ newWrap19.style.width = '100%';
 const newLocked19 = w19.document.createElement('div');
 newLocked19.id = 'newLocked';
 newLocked19.style.width = '600px';
-newLocked19.textContent = 'new tweet';
+newLocked19.innerHTML = '<div data-testid="cellInnerDiv">new tweet</div>';
 newWrap19.appendChild(newLocked19);
 newPrimary19.appendChild(newWrap19);
 oldPrimary19.replaceWith(newPrimary19);
@@ -671,11 +681,11 @@ const regionM = wMedia.document.getElementById('mcRegion');
 const wrapM = wMedia.document.getElementById('mcWrap');
 expect('宽列超高媒体行宿主被钳制', regionM.dataset.teMediaCapped, '1');
 // 预算 = min(540, 视口高−220=548) = 540：只把宿主 layout 高度压到 540
-expect('宿主 layout 高度压到预算（540）', regionM.style.height, '540px');
+expect('宿主 layout 高度压到预算', regionM.style.height, `${budgetOf(wMedia)}px`);
 expect('只改高度、不加 transform（避免双重缩放）', regionM.style.transform, '');
 // 宿主上方的纯包裹层（只含该媒体子链）若被 X 写死行高/用百分比 padding 撑高，
 // 会留下冗余空白：必须与宿主一起压到预算，百分比 padding 盒同步归零 padding。
-expect('纯包裹层一并压到预算', wrapM.style.height, '540px');
+expect('纯包裹层一并压到预算', wrapM.style.height, `${budgetOf(wMedia)}px`);
 expect('包裹层也打上钳制标记', wrapM.dataset.teMediaCapped, '1');
 expect('百分比 padding 比例盒的 padding 归零', wrapM.style.paddingBottom, '0px');
 
@@ -712,19 +722,24 @@ expect('解锁后还原包裹层原始 padding', wrapM.style.paddingBottom, 'cal
 // 100%（946px = 整列宽）：media-cap 只压了行高，格宽仍是整列，竖图被放大铺满
 // 整列（观感「图片宽高都不再受限」）。命中与否取决于解锁器 BFS 分片扫描与
 // media-cap 的 rAF 钳制谁先跑到该节点，所以同一页面冷加载时好时坏。
-// 修正后：轮播子树整体不参与解锁；轮播之外写死同样宽度的容器仍要正常解锁。
+// 修正后判据换成「角色」：只有承载内容单元的容器才可能被放开 —— 轮播格、推文内
+// 部写死的盒子都在**内容单元内部**，一律不参与；列容器（下面那条 contentColumn）照旧。
 const HTML_CAROUSEL = `<!doctype html><html><head></head><body>
   <nav aria-label="Primary"><a href="/home">主页</a></nav>
   <div id="row" style="display:flex">
     <div data-testid="primaryColumn" style="width:800px">
       <div style="width:100%">
-        <div id="carouselTweet" style="width:600px">
-          <div data-testid="ScrollSnap-List">
-            <div id="carouselCell" style="width:562px">轮播格（宽度来自媒体比例）</div>
-            <div data-testid="tweetPhoto"><img id="carouselImg" style="width:560px" /></div>
+        <div id="contentColumn" style="width:600px">
+          <div data-testid="cellInnerDiv">
+            <div id="carouselTweet" style="width:600px">
+              <div data-testid="ScrollSnap-List">
+                <div id="carouselCell" style="width:562px">轮播格（宽度来自媒体比例）</div>
+                <div data-testid="tweetPhoto"><img id="carouselImg" style="width:560px" /></div>
+              </div>
+              <div id="lockedInTweet" style="width:600px">轮播推文里轮播之外的写死容器</div>
+              <div id="fixed562Outside" style="width:562px">轮播之外的写死 562px</div>
+            </div>
           </div>
-          <div id="lockedInTweet" style="width:600px">轮播推文里轮播之外的写死容器</div>
-          <div id="fixed562Outside" style="width:562px">轮播之外的写死 562px</div>
         </div>
       </div>
     </div>
@@ -746,18 +761,23 @@ expect(
   undefined,
 );
 expect(
-  '轮播之外写死 562px 的容器照旧解锁（排除的是作用域而不是宽度）',
+  '轮播之外写死 562px 的容器也不解锁（在内容单元内部，按角色排除）',
   wCar.document.getElementById('fixed562Outside').dataset.teWidthUnlocked,
-  'fixed',
+  undefined,
 );
 expect(
-  '轮播所在的推文容器（600px 上限）仍被解锁',
+  '内容单元（cellInnerDiv）内部的推文容器不解锁',
   wCar.document.getElementById('carouselTweet').dataset.teWidthUnlocked,
-  'fixed',
+  undefined,
 );
 expect(
-  '轮播推文里、轮播之外的写死容器仍被解锁',
+  '内容单元内部、轮播之外的写死容器同样不解锁',
   wCar.document.getElementById('lockedInTweet').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '承载内容单元的列容器（600px）才被解锁',
+  wCar.document.getElementById('contentColumn').dataset.teWidthUnlocked,
   'fixed',
 );
 
@@ -775,6 +795,7 @@ for (let i = 0; i < 3002; i += 1) {
   if (i === 0) {
     d.id = 'burstLocked';
     d.style.width = '600px';
+    d.innerHTML = '<div data-testid="cellInnerDiv"></div>';
     burstLocked = d;
   }
   fragOver.appendChild(d);
@@ -782,7 +803,7 @@ for (let i = 0; i < 3002; i += 1) {
 tlOver.appendChild(fragOver);
 await sleep(700); // dom-watch 冲刷 → overflow → 整树补扫（300 节点/帧 × rAF 时间片）
 expect('溢出后新增的锁宽元素被整树补扫命中', burstLocked.dataset.teWidthUnlocked, 'fixed');
-expect('溢出补扫不打乱既有解锁标记', wOver.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('溢出补扫不打乱既有解锁标记', wOver.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
 // ================= 实例二十一：滚动增量新增的媒体走 rAF 帧任务被钳制 =================
 // 增量路径不再在 dom-watch 冲刷回调里同步扫描/钳制，而是收进下一个 rAF 帧任务。
@@ -830,7 +851,7 @@ colLate.appendChild(cellB);
 await sleep(450); // dom-watch 冲刷（120ms）+ rAF 帧任务
 expect('滚动新增的媒体宿主 A 被增量钳制', wrapA.dataset.teMediaCapped, '1');
 expect('滚动新增的媒体宿主 B 被增量钳制', wrapB.dataset.teMediaCapped, '1');
-expect('增量钳制只改宿主 layout height（540）', wrapA.style.height, '540px');
+expect('增量钳制只改宿主 layout height', wrapA.style.height, `${budgetOf(wML)}px`);
 
 // 模拟宿主 A 内图片加载完成且媒体自然高回落到预算内：
 // 只解锁 A 这一条链（宿主粒度对账），B 不受影响仍保持钳制
@@ -843,7 +864,7 @@ await sleep(250); // rAF 帧任务执行宿主粒度对账
 expect('宿主 A 图片回落预算内后解锁', wrapA.dataset.teMediaCapped, undefined);
 expect('宿主 A 解锁后清除 height', wrapA.style.height, '');
 expect('宿主 B 不受 A 的加载影响仍保持钳制', wrapB.dataset.teMediaCapped, '1');
-expect('宿主 B 高度仍为预算（540）', wrapB.style.height, '540px');
+expect('宿主 B 高度仍为预算', wrapB.style.height, `${budgetOf(wML)}px`);
 
 // ================= 实例二十三：X 没渲染三栏的页面交回原生 =================
 // 实测（2026-09-08，1440 视口，headless 独立 profile）：
@@ -918,27 +939,27 @@ expect('时间线页宽度变量为 980px', wTimeline.document.documentElement.s
 const wGate = createWindow();
 wGate.eval(script);
 await sleep(200);
-expect('门控前置：宽列开启时既有元素已解锁', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('门控前置：宽列开启时既有元素已解锁', wGate.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
 // 开关从设置面板里点（驱动真实 UI）
 toggleSetting(wGate, 'timeline-wide');
 await sleep(60);
-expect('关闭宽列后既有解锁标记被撤销', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+expect('关闭宽列后既有解锁标记被撤销', wGate.document.getElementById('timeline').dataset.teWidthUnlocked, undefined);
 
 const tlGate = wGate.document.getElementById('timeline');
 const lateGate = wGate.document.createElement('div');
 lateGate.id = 'lateGate';
 lateGate.style.width = '600px';
-lateGate.textContent = 'late tweet while off';
+lateGate.innerHTML = '<div data-testid="cellInnerDiv">late tweet while off</div>';
 tlGate.appendChild(lateGate);
 await sleep(320);
 expect('关闭宽列后新增锁宽元素不被打标记', lateGate.dataset.teWidthUnlocked, undefined);
-expect('关闭宽列后既有元素仍无标记', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+expect('关闭宽列后既有元素仍无标记', wGate.document.getElementById('timeline').dataset.teWidthUnlocked, undefined);
 
 toggleSetting(wGate, 'timeline-wide');
 await sleep(420);
 expect('重新开启宽列后新增元素被整树补扫解锁', lateGate.dataset.teWidthUnlocked, 'fixed');
-expect('重新开启宽列后既有元素恢复标记', wGate.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('重新开启宽列后既有元素恢复标记', wGate.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
 // ================= 实例二十五：SPA 导航到 X Chat 后立即撤销宽列 =================
 // 覆盖「路由判定必须早于主列挂载」这条时序：从 /home 导航到 /i/chat 时聊天主列
@@ -954,13 +975,13 @@ wNav.history.pushState({}, '', '/i/chat');
 await sleep(160);
 expect('SPA 导航到 X Chat 后撤销宽列', wNav.document.documentElement.dataset.teTimeline, 'off');
 expect('SPA 导航到 X Chat 后清掉行的 min-width', wNav.document.getElementById('row').style.minWidth, '');
-expect('SPA 导航到 X Chat 后解锁标记被撤销', wNav.document.getElementById('tweet').dataset.teWidthUnlocked, undefined);
+expect('SPA 导航到 X Chat 后解锁标记被撤销', wNav.document.getElementById('timeline').dataset.teWidthUnlocked, undefined);
 
 wNav.history.pushState({}, '', '/home');
 await sleep(160);
 expect('导航回时间线后恢复宽列', wNav.document.documentElement.dataset.teTimeline, 'wide');
 expect('导航回时间线后主列重新铺满内容区', wNav.document.documentElement.dataset.teTimelineWidth, '980');
-expect('导航回时间线后重新解锁', wNav.document.getElementById('tweet').dataset.teWidthUnlocked, 'fixed');
+expect('导航回时间线后重新解锁', wNav.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
 
 // ================= 实例二十六：SPA 导航 /home → /i/grok 不把 Grok 钉窄 =================
 // 真机逐帧实测（2026-09-08，1440 视口）：从 /home 点左栏 Grok 进入时，新主列会先以
@@ -1013,6 +1034,505 @@ await sleep(160);
 expect('导航回 /home 后恢复宽列', wGrokNav.document.documentElement.dataset.teTimeline, 'wide');
 expect('导航回 /home 后主列重新铺满内容区（980）', wGrokNav.document.documentElement.dataset.teTimelineWidth, '980');
 
+// ================= 实例二十八：单图等比（fit）模式 =================
+// 真机缺陷（2026-09-14，/home @1440，脚本 ON）：X 用百分比 padding 比例盒把单图铺满列宽，
+// 只压宿主高度会让图片被拉到容器尺寸 —— 实测方图 900×895 渲染成 896×540（比例 1.005 → 1.66，
+// object-fit: fill，等于纵向压扁 40%）。fit 模式改成「按预算高度等比缩宽度 + 水平居中」。
+const HTML_FIT = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="fitWrap" data-w="896" data-h="891" style="padding-bottom: 99.44%">
+          <div id="fitHost" data-w="896" data-h="891">
+            <div id="fitPhoto" data-testid="tweetPhoto" style="margin: 0px"><img id="fitImg" /></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wFit = createWindow(HTML_FIT);
+// jsdom 不解码图片：直接给 img 一个自然尺寸（真实浏览器里来自解码后的位图）
+const fitImg = wFit.document.getElementById('fitImg');
+Object.defineProperty(fitImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(fitImg, 'naturalHeight', { configurable: true, value: 895 });
+wFit.eval(script);
+await sleep(200);
+const fitHost = wFit.document.getElementById('fitHost');
+const fitPhoto = wFit.document.getElementById('fitPhoto');
+expect('单图超预算时宿主仍被钳制', fitHost.dataset.teMediaCapped, '1');
+// 预算 = min(540, 768−220=548) = 540；宽度 = round(540 × 900 / 895) = 543
+// 预算高 × 900/895 等比 → 宽度
+expect('fit 模式按原比例缩宽度', fitPhoto.style.width, `${Math.round((budgetOf(wFit) * 900) / 895)}px`);
+expect('fit 模式高度取满预算', fitPhoto.style.height, `${budgetOf(wFit)}px`);
+// 2026-09-14 用户实测反馈：只缩图片会留下「容器比图片大、左右一圈冗余空间」，
+// 宿主必须一起收到图片宽度（X 的 8px 圆角包裹贴着图片，右侧留页面底色）
+expect('fit 模式宿主收到与图片同宽（不再比图片大）', fitHost.style.width, `${Math.round((budgetOf(wFit) * 900) / 895)}px`);
+expect(
+  'fit 标记同时打在图片容器与宿主上（解锁器据此放过它们）',
+  `${fitPhoto.dataset.teMediaFit}/${fitHost.dataset.teMediaFit}`,
+  '1/1',
+);
+
+// 宽度解锁器必须放过 fit 过的媒体：实测 608px（= 540 × 1200/1066）落在
+// lockedRange [560,660] 内被误判成「X 写死的 600px 容器」，宽被顶回整列而高度
+// 仍是我们设的预算 → 图片横向拉伸 1.6 倍；且是否命中取决于扫描顺序，刷新后观感不同。
+const wUnlock = createWindow(HTML_FIT);
+const unlockImg = wUnlock.document.getElementById('fitImg');
+Object.defineProperty(unlockImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(unlockImg, 'naturalHeight', { configurable: true, value: 895 });
+// 对照组：一对**结构完全相同**的列容器（都内含内容单元、宽 608px，落在锁宽区间内），
+// 唯一区别是其中一个带 data-te-script-sized（脚本自写尺寸登记）。
+// 这样才隔离出「禁止自反馈」这一条判据 —— 挂进 fit 子树里测不出东西，
+// 因为那同时还会被「只解锁承载内容单元的容器」这条角色判据排除。
+const makeColumn = (id, marked) => {
+  const el = wUnlock.document.createElement('div');
+  el.id = id;
+  el.style.width = '608px';
+  el.innerHTML = '<div data-testid="cellInnerDiv"></div>';
+  if (marked) el.dataset.teScriptSized = '1';
+  wUnlock.document.querySelector('[data-testid="primaryColumn"]').appendChild(el);
+};
+makeColumn('unlockControlMarked', true);
+makeColumn('unlockControlPlain', false);
+wUnlock.eval(script);
+await sleep(260);
+expect(
+  '解锁器放过 fit 过的图片容器（宽度是媒体比例，不是容器上限）',
+  wUnlock.document.getElementById('fitPhoto').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '解锁器放过 fit 过的宿主',
+  wUnlock.document.getElementById('fitHost').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '带脚本自写标记的列容器不解锁（禁止自反馈）',
+  wUnlock.document.getElementById('unlockControlMarked').dataset.teWidthUnlocked,
+  undefined,
+);
+expect(
+  '同结构、无脚本自写标记的列容器照旧解锁（判据是标记，不是宽度）',
+  wUnlock.document.getElementById('unlockControlPlain').dataset.teWidthUnlocked,
+  'fixed',
+);
+
+// 关闭单图等比 → 还原 X 的内联样式，只保留高度钳制
+toggleSetting(wFit, 'media-fit');
+await sleep(60);
+expect('关闭单图等比后清除图片内联宽度', fitPhoto.style.width, '');
+expect('关闭单图等比后宿主宽度也还原', fitHost.style.width, '');
+expect('关闭单图等比后清除 fit 标记', fitPhoto.dataset.teMediaFit, undefined);
+expect('关闭单图等比后宿主仍被钳制（旧行为）', fitHost.dataset.teMediaCapped, '1');
+expect('单图等比开关状态刷新为关', settingState(wFit, 'media-fit'), 'false');
+toggleSetting(wFit, 'media-fit');
+await sleep(60);
+expect('重新开启单图等比后再次等比缩宽度', fitPhoto.style.width, `${Math.round((budgetOf(wFit) * 900) / 895)}px`);
+expect('单图等比开关状态刷新为开', settingState(wFit, 'media-fit'), 'true');
+
+// 轮播（ScrollSnap-List 多格）不参与 fit：格子自带内联比例，压行高即自动等比重排
+const HTML_FIT_CAROUSEL = HTML_FIT.replace(
+  '<div id="fitPhoto" data-testid="tweetPhoto" style="margin: 0px"><img id="fitImg" /></div>',
+  `<div data-testid="ScrollSnap-List">
+     <div data-testid="tweetPhoto"><img id="fitImg" /></div>
+     <div data-testid="tweetPhoto"><img id="fitImg2" /></div>
+   </div>`,
+);
+const wFitCar = createWindow(HTML_FIT_CAROUSEL);
+const carImg = wFitCar.document.getElementById('fitImg');
+Object.defineProperty(carImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(carImg, 'naturalHeight', { configurable: true, value: 895 });
+wFitCar.eval(script);
+await sleep(200);
+expect(
+  '轮播里不做单图等比（否则会破坏 X 自己的比例重排）',
+  wFitCar.document.querySelector('[data-te-media-fit]'),
+  null,
+);
+
+// ================= 实例二十九：内容列排版（语义分类 / 焦点帖 / 轮播序号） =================
+// 标本（2026-09-14 实测）：SENA 8ito 那条帖子正文 textContent 长度 0、只有 6 个 emoji <img>，
+// 却按 16px/1.5 的段落排版。分类写在 article[data-te-caption] 上，CSS 按类排版；
+// 焦点帖用「article 里有 a[href] 的路径 === location.pathname」判定（同页 45 条回复均不命中）。
+const HTML_COLUMN = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div data-testid="cellInnerDiv" id="heroCell">
+          <article data-testid="tweet" id="tweetHero">
+            <div data-testid="User-Name">作者</div>
+            <div data-testid="tweetText"><img alt="☀️" /><img alt="🌱" /></div>
+            <div id="carouselRow" data-w="978">
+              <div data-testid="ScrollSnap-List" id="snapList">
+                <div data-w="291" id="tile1"></div>
+                <div data-w="291" id="tile2"></div>
+                <div data-w="291" id="tile3"></div>
+              </div>
+            </div>
+            <div role="group"><div data-testid="reply"></div><div data-testid="views"></div></div>
+            <a href="/alice/status/111">时间</a>
+          </article>
+        </div>
+        <div data-testid="cellInnerDiv" id="shortCell">
+          <article data-testid="tweet" id="tweetShort">
+            <div data-testid="tweetText">太强了</div>
+            <a href="/bob/status/222">时间</a>
+          </article>
+        </div>
+        <div data-testid="cellInnerDiv" id="longCell">
+          <article data-testid="tweet" id="tweetLong">
+            <div data-testid="tweetText">${'长'.repeat(40)}</div>
+            <a href="/carol/status/333">时间</a>
+          </article>
+        </div>
+        <div data-testid="cellInnerDiv" id="mediaCell">
+          <article data-testid="tweet" id="tweetMedia">
+            <div data-testid="tweetPhoto">图</div>
+            <a href="/dave/status/444">时间</a>
+          </article>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wCol = createWindow(HTML_COLUMN, 'https://x.com/alice/status/111');
+wCol.eval(script);
+await sleep(220);
+const colRoot = wCol.document.documentElement;
+const tweetHero = wCol.document.getElementById('tweetHero');
+expect('内容列排版默认开启', colRoot.dataset.teColumn, 'on');
+expect('emoji 独占正文 → caption=emoji', tweetHero.dataset.teCaption, 'emoji');
+expect('短句 → caption=short', wCol.document.getElementById('tweetShort').dataset.teCaption, 'short');
+expect('长文 → caption=long', wCol.document.getElementById('tweetLong').dataset.teCaption, 'long');
+expect('无正文 → caption=none', wCol.document.getElementById('tweetMedia').dataset.teCaption, 'none');
+expect('焦点帖被标记（URL 里的那条）', tweetHero.dataset.teHero, '1');
+expect('焦点帖的单元格被标记（CSS 据此去掉下边界线）', wCol.document.getElementById('heroCell').dataset.teHeroCell, '1');
+expect('回复不会被标成焦点帖', wCol.document.getElementById('tweetShort').dataset.teHero, undefined);
+expect('多图轮播写出序号（1/3）', wCol.document.getElementById('carouselRow').dataset.teCarousel, '1/3');
+expect('单图帖不写轮播序号', wCol.document.getElementById('mediaCell').dataset.teCarousel, undefined);
+
+// 关掉内容列排版：属性全清，交回 X 原生
+toggleSetting(wCol, 'content-column');
+await sleep(60);
+expect('关闭内容列排版后属性转为 off', colRoot.dataset.teColumn, 'off');
+expect('关闭后清除语义分类', tweetHero.dataset.teCaption, undefined);
+expect('关闭后清除焦点帖标记', tweetHero.dataset.teHero, undefined);
+expect('关闭后清除单元格标记', wCol.document.getElementById('heroCell').dataset.teHeroCell, undefined);
+expect('关闭后清除轮播序号', wCol.document.getElementById('carouselRow').dataset.teCarousel, undefined);
+expect('内容列排版开关状态刷新为关', settingState(wCol, 'content-column'), 'false');
+toggleSetting(wCol, 'content-column');
+await sleep(60);
+expect('重新开启后语义分类恢复', tweetHero.dataset.teCaption, 'emoji');
+expect('重新开启后焦点帖标记恢复', tweetHero.dataset.teHero, '1');
+expect('内容列排版开关状态刷新为开', settingState(wCol, 'content-column'), 'true');
+
+// ================= 实例三十：轮播格不被当成行宿主，也不进 fit =================
+// 真机缺陷（2026-09-14，Sena 4 图竖图帖，1440 视口）：轮播某格的「比例盒」在未钳制状态下
+// 宽 591px（≥ lockWidth 566），被当成行宿主单独钳制（格高 540），其余格由行宿主钳制后是 534
+// —— 同一轮播里首格比其它格大一圈，行框也被撑到 1010px；同时该格内部只有 1 张图，
+// 单图等比把尺寸钉在它身上，轮播其余格到达后也不还原（刷新后观感不同）。
+// 修正：轮播内部的元素一律不作为宿主（轮播列表自身仍可），且轮播里的媒体不参与 fit。
+const HTML_CAROUSEL_HOST = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="carRow" data-w="978" data-h="900" style="padding-bottom: 90%">
+          <div data-testid="ScrollSnap-List" id="carList" data-w="978" data-h="900">
+            <div id="carBox" data-w="591" data-h="900">
+              <div data-testid="tweetPhoto" id="carPhoto" data-w="591" data-h="900"><img id="carImg" /></div>
+            </div>
+            <div id="carBox2" data-w="591" data-h="900">
+              <div data-testid="tweetPhoto" data-w="591" data-h="900"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wCarHost = createWindow(HTML_CAROUSEL_HOST);
+const carHostImg = wCarHost.document.getElementById('carImg');
+Object.defineProperty(carHostImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(carHostImg, 'naturalHeight', { configurable: true, value: 895 });
+wCarHost.eval(script);
+await sleep(220);
+const carHostList = wCarHost.document.getElementById('carList');
+const carHostBox = wCarHost.document.getElementById('carBox');
+expect('轮播列表自身作为行宿主被钳制', carHostList.dataset.teMediaCapped, '1');
+expect('轮播列表被压到预算高度', carHostList.style.height, `${budgetOf(wCarHost)}px`);
+expect('轮播格（宽 591 ≥ lockWidth）不被单独当成宿主', carHostBox.dataset.teMediaCapped, undefined);
+expect(
+  '轮播里的媒体不参与单图等比',
+  wCarHost.document.querySelectorAll('[data-te-media-fit]').length,
+  0,
+);
+expect('轮播列表外层（比例盒）一并压到预算', wCarHost.document.getElementById('carRow').style.height, `${budgetOf(wCarHost)}px`);
+
+// 单格轮播（X 逐格渲染时的中间态）：轮播里只有 1 张图也不能 fit
+const HTML_CAROUSEL_ONE = HTML_CAROUSEL_HOST.replace(
+  '<div id="carBox2" data-w="591" data-h="900">\n              <div data-testid="tweetPhoto" data-w="591" data-h="900"></div>\n            </div>',
+  '',
+);
+const wCarOne = createWindow(HTML_CAROUSEL_ONE);
+const carOneImg = wCarOne.document.getElementById('carImg');
+Object.defineProperty(carOneImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(carOneImg, 'naturalHeight', { configurable: true, value: 895 });
+wCarOne.eval(script);
+await sleep(220);
+expect(
+  '单格轮播（逐格渲染中间态）也不进 fit',
+  wCarOne.document.querySelectorAll('[data-te-media-fit]').length,
+  0,
+);
+expect('单格轮播仍按行宿主钳制', wCarOne.document.getElementById('carList').dataset.teMediaCapped, '1');
+
+// ================= 实例三十一：列容器先出现、推文后渲染（用户实测回归） =================
+// 真机时序：X 先挂「列容器」（带 max-width:600px 的 hashed class），再往里渲染推文。
+// 曾经用「这个元素内部有没有内容单元」判断角色 —— 容器被扫描时内部还是空的，判 false；
+// 而祖先一旦扫过就不会再回看，于是那个唯一的列宽上限始终不被标记，整列退回 600px
+// （用户实测「推文长度变回 600 宽」）。现在的实现从内容单元向上走祖先链，
+// 内容后到时自然会补上。
+const HTML_LATE_CONTENT = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="lateContainer" style="max-width:600px"></div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wLate = createWindow(HTML_LATE_CONTENT);
+wLate.eval(script);
+await sleep(200);
+expect(
+  '容器先出现时（内部还没内容）不打标记',
+  wLate.document.getElementById('lateContainer').dataset.teWidthUnlocked,
+  undefined,
+);
+// X 现在才把推文渲染进容器
+const lateCell = wLate.document.createElement('div');
+lateCell.setAttribute('data-testid', 'cellInnerDiv');
+lateCell.innerHTML = '<article data-testid="tweet">hi</article>';
+wLate.document.getElementById('lateContainer').appendChild(lateCell);
+await sleep(320); // dom-watch 合并 + rAF 帧任务
+expect(
+  '内容到达后列容器被补上解锁标记（祖先链补扫）',
+  wLate.document.getElementById('lateContainer').dataset.teWidthUnlocked,
+  'max',
+);
+
+// ================= 实例三十二：视频 / GIF 也走等比 + 行高正好等于预算的坑 =================
+// 真机缺陷（2026-09-14，akaoni2gou 的 GIF 帖，1440 视口）：
+// ① X 的播放器比例盒把行高做成了**正好 540 = 预算**，旧实现先判「自然高度 ≤ 预算 → 无需处理」
+//    就直接返回，等比永远不生效 → 盒子停在整列宽 976×540，`object-fit: contain` 把画面缩到
+//    652 宽、两侧各留 164px 黑边；
+// ② 用 videoWidth/Height 之外，播放器里还挂着 240×240 的装饰图，按 DOM 顺序取 img 会取错。
+// 现在：判据改成「固有比例 × 行宽 > 预算」，盒子高度取 min(预算, 宿主当前高度)，固有尺寸取面积最大者。
+const HTML_VIDEO = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="vidWrap" data-w="896" data-h="540" style="padding-bottom: 55.3279%">
+          <div id="vidHost" data-w="896" data-h="540">
+            <div id="vidPhoto" data-testid="tweetPhoto" data-w="896" data-h="540" style="margin: 0px">
+              <img id="vidIcon" />
+              <div data-testid="videoPlayer" id="vidPlayer"><video id="vidEl"></video></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wVideo = createWindow(HTML_VIDEO);
+// jsdom 不解码媒体：直接给装饰图与视频各自的固有尺寸
+const vidIcon = wVideo.document.getElementById('vidIcon');
+Object.defineProperty(vidIcon, 'naturalWidth', { configurable: true, value: 240 });
+Object.defineProperty(vidIcon, 'naturalHeight', { configurable: true, value: 240 });
+const vidEl = wVideo.document.getElementById('vidEl');
+Object.defineProperty(vidEl, 'videoWidth', { configurable: true, value: 1200 });
+Object.defineProperty(vidEl, 'videoHeight', { configurable: true, value: 1000 });
+wVideo.eval(script);
+await sleep(240);
+const vidPhoto = wVideo.document.getElementById('vidPhoto');
+const vidHost = wVideo.document.getElementById('vidHost');
+expect('GIF 帖：行高正好等于预算时依然进入等比', vidPhoto.dataset.teMediaFit, '1');
+// 视频 1200×1000（比例 1.2）→ 540 × 1.2 = 648；若误取 240×240 的装饰图会得到 540
+// 预算高 × 1200/1000 等比 → 宽度
+expect('等比按视频固有比例算宽度', vidPhoto.style.width, `${Math.round((budgetOf(wVideo) * 1200) / 1000)}px`);
+expect('等比高度取预算', vidPhoto.style.height, `${budgetOf(wVideo)}px`);
+expect('宿主与媒体同宽', vidHost.style.width, `${Math.round((budgetOf(wVideo) * 1200) / 1000)}px`);
+expect('媒体链整条收窄（含外层比例盒）', wVideo.document.getElementById('vidWrap').style.width, `${Math.round((budgetOf(wVideo) * 1200) / 1000)}px`);
+// 盒内嵌套的播放器也要钉成同一个盒子：它的高度来自 X 那层「按盒宽算高度」的比例盒，
+// 只钉外层时实测会在 648×540 / 648×359 / 648×0 之间飘（GIF 帖上下黑边或整块塌掉）
+expect(
+  '盒内嵌套的播放器被一起钉成同一尺寸',
+  `${wVideo.document.getElementById('vidPlayer').style.width}×${wVideo.document.getElementById('vidPlayer').style.height}`,
+  `${Math.round((budgetOf(wVideo) * 1200) / 1000)}px×${budgetOf(wVideo)}px`,
+);
+
+// 关闭单图等比 → 内部嵌套播放器的内联尺寸必须还原
+toggleSetting(wVideo, 'media-fit');
+await sleep(60);
+expect(
+  '关闭等比后嵌套播放器的内联尺寸还原',
+  wVideo.document.getElementById('vidPlayer').getAttribute('style'),
+  null,
+);
+
+// 反向：整列宽下按比例算出来不超过预算的宽图，不参与等比（保持「只缩不放」）
+const HTML_WIDE_MEDIA = HTML_VIDEO.replace('data-w="896" data-h="540"', 'data-w="896" data-h="300"')
+  .replace('<div data-testid="videoPlayer"><video id="vidEl"></video></div>', '');
+const wWideMedia = createWindow(HTML_WIDE_MEDIA);
+const wideIcon = wWideMedia.document.getElementById('vidIcon');
+Object.defineProperty(wideIcon, 'naturalWidth', { configurable: true, value: 1200 });
+Object.defineProperty(wideIcon, 'naturalHeight', { configurable: true, value: 600 });
+wWideMedia.eval(script);
+await sleep(240);
+expect(
+  '宽图（896/2 = 448 ≤ 预算）不参与等比，交回 X 满宽',
+  wWideMedia.document.getElementById('vidPhoto').style.width,
+  '',
+);
+
+// ================= 实例三十三：已钳行里又长出一张图（轮播成型）走增量路径 =================
+// 旧版增量路径分两套：新增节点的 applyOne 撞上 `media.closest(FLAG_SELECTOR)` 会直接返回，
+// 于是「宿主里从 1 张图变成 2 张图（轮播成型）」这类情况在增量路径上被漏掉，只能等下一次
+// 全量对账 —— 期间那一行还留着按单图等比钉下的尺寸。现在两条来源合成一种「种子」，
+// 任何种子都先解锁它所在的链再重新钳制。
+const wGrow = createWindow(HTML_FIT);
+const growImg = wGrow.document.getElementById('fitImg');
+Object.defineProperty(growImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(growImg, 'naturalHeight', { configurable: true, value: 895 });
+wGrow.eval(script);
+await sleep(240);
+expect('初始为单图：进入等比', wGrow.document.getElementById('fitPhoto').dataset.teMediaFit, '1');
+// X 现在把第二张图渲染进同一行
+const growPhoto = wGrow.document.createElement('div');
+growPhoto.setAttribute('data-testid', 'tweetPhoto');
+growPhoto.id = 'growPhoto';
+growPhoto.style.cssText = 'width:100%;height:100%';
+growPhoto.innerHTML = '<img id="growImg2" />';
+wGrow.document.getElementById('fitHost').appendChild(growPhoto);
+await sleep(500); // dom-watch 合并 + rAF 帧任务 + 去抖全量对账
+expect('轮播成型后不再按单图等比（等比重排交给 X）', wGrow.document.getElementById('fitPhoto').dataset.teMediaFit, undefined);
+expect('轮播成型后行仍被钳制', wGrow.document.getElementById('fitHost').dataset.teMediaCapped, '1');
+expect(
+  '整行不再残留任何 fit 尺寸',
+  wGrow.document.querySelectorAll('[data-te-media-fit]').length,
+  0,
+);
+expect('新加入的那张图不被当成等比目标', growPhoto.dataset.teMediaFit, undefined);
+
+// ================= 实例三十四：SPA 导航重挂主列时，不能把我们自己的宽度当成原生列宽 =========
+// 真机缺陷（2026-09-14 用户实测）：SPA 导航到另一个三栏页时，上一页的 data-te-timeline='wide'
+// 还在，新主列一挂载就被 CSS 写成目标宽 —— 若此刻去「实测原生列宽」，读到的是脚本自己的输出
+// （这里用 data-w="980" 模拟），解锁器判据区间被挪到 [930,1030] → 列容器不再被放开 →
+// 时间线内容退回 600px，且一直坏到整页刷新。
+const wSpa = createWindow();
+wSpa.eval(script);
+await sleep(200);
+expect('SPA 前：列容器已解锁', wSpa.document.getElementById('timeline').dataset.teWidthUnlocked, 'max');
+const spaOldPrimary = wSpa.document.querySelector('[data-testid="primaryColumn"]');
+const spaNewPrimary = wSpa.document.createElement('div');
+spaNewPrimary.setAttribute('data-testid', 'primaryColumn');
+spaNewPrimary.setAttribute('data-w', '980'); // 已经是我们写进去的目标宽（CSS 仍生效）
+spaNewPrimary.innerHTML =
+  '<div style="width:100%"><div id="timeline2" style="max-width:600px"><div data-testid="cellInnerDiv">hi</div></div></div>';
+spaOldPrimary.replaceWith(spaNewPrimary);
+wSpa.history.pushState({}, '', '/indiezhou');
+await sleep(400);
+expect('SPA 后：新主列里的列容器仍被解锁（判据区间没被自己的宽度带偏）', wSpa.document.getElementById('timeline2').dataset.teWidthUnlocked, 'max');
+
+// ================= 实例三十五：窄媒体被 X 逐层 shrink-wrap 时，中间包裹层也要钉住 =========
+// 真机缺陷（2026-09-14 用户实测，Ford_R_plus 竖长单图 292×680）：X 自己把竖长图 letterbox 到
+// 510 高（宽只剩 219），媒体列上每一层包裹都窄于 lockWidth —— findHost 只能一路抬到整行
+// （978）才命中宿主，于是这些包裹层落在宿主**内部**、逃出 run。只钉宿主与媒体时，媒体盒被
+// 钉成 249×580、外面几层仍是 219×510（其中一层还带 X 自己的内联 width:218.875px;height:510px），
+// 图片从容器右下溢出 30×70px、卡片圆角边框横切图片中下部 ——「包裹它的容器和图片不匹配」复现。
+const HTML_SHRINK = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div id="shrinkRow" data-w="978" data-h="891">
+          <div id="shrinkCard" data-w="219" data-h="510" style="width: 218.875px; height: 510px; max-width: 180px;">
+            <div id="shrinkInner" data-w="219" data-h="510">
+              <div id="shrinkPhoto" data-testid="tweetPhoto" data-w="219" data-h="510" style="margin: 0px"><img id="shrinkImg" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+const wShrink = createWindow(HTML_SHRINK);
+const shrinkImg = wShrink.document.getElementById('shrinkImg');
+Object.defineProperty(shrinkImg, 'naturalWidth', { configurable: true, value: 292 });
+Object.defineProperty(shrinkImg, 'naturalHeight', { configurable: true, value: 680 });
+wShrink.eval(script);
+await sleep(220);
+const shrinkRow = wShrink.document.getElementById('shrinkRow');
+const shrinkCard = wShrink.document.getElementById('shrinkCard');
+const shrinkInner = wShrink.document.getElementById('shrinkInner');
+const shrinkPhoto = wShrink.document.getElementById('shrinkPhoto');
+const shrinkWidth = Math.round((budgetOf(wShrink) * 292) / 680);
+expect('窄媒体（竖长图）的宿主被抬到整行并钳制', shrinkRow.dataset.teMediaCapped, '1');
+expect(
+  '等比尺寸按整行宽 × 固有比例判定（不被 219 宽的包裹层带偏）',
+  `${shrinkPhoto.style.width}×${shrinkPhoto.style.height}`,
+  `${shrinkWidth}px×${budgetOf(wShrink)}px`,
+);
+expect(
+  '媒体到宿主之间每一层包裹都钉到同一尺寸（容器与图片闭合，无溢出）',
+  [shrinkPhoto, shrinkInner, shrinkCard].map((el) => `${el.style.width}×${el.style.height}`).join(','),
+  Array(3).fill(`${shrinkWidth}px×${budgetOf(wShrink)}px`).join(','),
+);
+expect(
+  '中间包裹层也带 fit 标记（解锁器与解锁路径都覆盖到它们）',
+  `${shrinkCard.dataset.teMediaFit}/${shrinkInner.dataset.teMediaFit}`,
+  '1/1',
+);
+// X 把「自己那 510px 高度上限」写成内联 max-width（= 510 × 固有比例）：它会小于我们算出的
+// 等比宽度，只钉 width 会被它卡住 —— 真机 /home 实测我们写 width:433px、X 的
+// max-width:380.8px 把盒子卡在 381，图片比容器宽出 52px。max-width 必须一起解除。
+expect('解除了 X 内联 max-width 的宽度上限（否则宽度被卡住、图片溢出）', shrinkCard.style.maxWidth, 'none');
+expect('媒体盒上的 max-width 上限也解除', shrinkPhoto.style.maxWidth, 'none');
+expect('解除了 X 内联 max-height 的高度上限', shrinkCard.style.maxHeight, 'none');
+// 关闭等比：中间层常带 X 自己的内联宽高，必须逐字还原而不是 removeProperty
+toggleSetting(wShrink, 'media-fit');
+await sleep(80);
+expect('关闭等比后 X 的内联比例盒宽度逐字还原', shrinkCard.style.width, '218.875px');
+expect('关闭等比后 X 的内联比例盒高度逐字还原', shrinkCard.style.height, '510px');
+expect('关闭等比后 X 的内联 max-width 逐字还原', shrinkCard.style.maxWidth, '180px');
+expect(
+  '关闭等比后媒体保留自己的其它内联样式（整条 style 快照回写）',
+  shrinkPhoto.style.margin,
+  '0px',
+);
+expect(
+  '关闭等比后中间包裹层不再带 fit 标记',
+  `${shrinkCard.dataset.teMediaFit}/${shrinkInner.dataset.teMediaFit}`,
+  'undefined/undefined',
+);
+
 // ================= 输出 =================
 let failed = 0;
 for (const r of results) {
@@ -1021,3 +1541,5 @@ for (const r of results) {
 }
 console.log(failed === 0 ? `\n全部通过（${results.length} 项）` : `\n${failed} 项失败`);
 process.exit(failed === 0 ? 0 : 1);
+
+

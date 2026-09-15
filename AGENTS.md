@@ -1,7 +1,7 @@
 # AGENTS.md
 
 **twitter-enhancer**：优化 x.com 网页体验的油猴脚本（Vite + vite-plugin-monkey + TS，中文注释）。
-源码 `twitter-enhancer/src/`，产物 `twitter-enhancer/dist/twitter-enhancer.user.js`，包管理器 **npm**（图标 / 私信 / 推文 UI / 媒体高度）。
+源码 `twitter-enhancer/src/`，产物 `twitter-enhancer/dist/twitter-enhancer.user.js`，包管理器 **npm**（图标 / 私信 / 推文 UI / 媒体高度 / 内容列排版）。
 
 ## 红线
 
@@ -23,3 +23,4 @@
 | 改功能、加开关、跑门禁、发版 | `twitter-enhancer/docs/development.md` |
 | 动 DOM 观察、路由、宽度 / 布局门控 | `twitter-enhancer/docs/architecture.md` |
 | 改列宽、媒体钳制、推文与设置面板外观 | `twitter-enhancer/docs/design-notes.md` |
+| 改内容列排版（版心 / 内容语义 / 焦点帖 / 单图等比） | `twitter-enhancer/docs/content-column-design.md` |

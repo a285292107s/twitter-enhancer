@@ -6,6 +6,7 @@ import { enableTimelineWidth } from './timeline-width';
 import { enableTweetUi } from './tweet-ui';
 import { enableSidebarSearch } from './sidebar';
 import { enableMediaCap } from './media-cap';
+import { enableContentColumn } from './content-column';
 import { enableSettingsPanel } from './settings-panel';
 
 export interface Feature {
@@ -21,6 +22,7 @@ export const features: Feature[] = [
   { name: 'tweet-ui', enabled: true, enable: enableTweetUi },
   { name: 'sidebar-search', enabled: true, enable: enableSidebarSearch },
   { name: 'media-cap', enabled: true, enable: enableMediaCap },
+  { name: 'content-column', enabled: true, enable: enableContentColumn },
   // 页内设置面板放最后：先让各功能把开关登记进设置注册表，面板首次渲染就是完整列表
   // （即便顺序变了也只是重绘一次，见 settings-panel.ts 的 renderRows）。
   { name: 'settings-panel', enabled: true, enable: enableSettingsPanel },
