@@ -9,6 +9,17 @@ node_modules/
 pnpm-lock.yaml
 yarn.lock
 
+# 构建产物 dist/ 有意提交：一般用户直接装 dist/twitter-enhancer.user.js，
+# 不要给它加忽略规则；改 src 后重新构建并一起提交新产物。
+
+# TypeScript 增量构建信息
+*.tsbuildinfo
+
+# 本地环境变量（如 TE_E2E_EXECUTABLE 指定的内核路径，含机器相关信息）；示例文件可提交
+.env
+.env.*
+!.env.example
+
 # Editor
 .vscode/*
 !.vscode/extensions.json
@@ -24,6 +35,12 @@ logs
 browser-profiles/
 .playwright-cli/
 
-# 登录态导出文件（x.com 会话等，含凭据，任何位置/变体名都禁止提交）
+# 登录态导出文件（x.com 会话等，含 auth_token/ct0，任何位置/变体名都禁止提交）
 auth*.json
+*-auth*.json
+*_auth*.json
 cookie*.json
+# Playwright storageState：browser-automation.md 里让用户导出的文件可能叫这些名字
+storage-state*.json
+storageState*.json
+*.storageState.json

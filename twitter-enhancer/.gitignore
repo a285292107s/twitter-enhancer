@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist/ 不忽略：产物 twitter-enhancer.user.js 是给一般用户直接安装的交付物
 dist-ssr
 *.local
 
