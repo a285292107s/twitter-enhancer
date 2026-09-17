@@ -33,8 +33,9 @@
 https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-enhancer/dist/twitter-enhancer.user.js
 ```
 
-然后打开 <https://x.com/home>。从在线地址安装的，脚本管理器会按这个地址检查更新
-（后续修复能自动到手）；需要手动更新时重新打开上面的地址覆盖安装即可。
+然后打开 <https://x.com/home>。脚本头部声明了固定的更新源（`@updateURL` / `@downloadURL` 都指向
+上面这个地址），脚本管理器会定期回它检查新版本，后续修复能自动到手；想立刻拿新版，就在管理器里
+点一次「检查更新」。
 
 ### 手动安装
 
@@ -42,7 +43,8 @@ https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-en
 2. 脚本管理器 → 新建脚本 → 把文件内容整体粘贴进去 → 保存；
 3. 打开 <https://x.com/home>。
 
-> 手动粘贴安装的**不会自动更新**（脚本管理器不知道更新源），需要重新下载覆盖。
+> 手动粘贴安装的**不保证自动更新**：更新源写在脚本头部的 `@updateURL` 里，有的管理器会照它
+> 检查，有的不会 —— 没有把握就重新下载覆盖一次。
 
 ## 生效范围与已知取舍
 
@@ -62,8 +64,10 @@ https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-en
 ## 隐私
 
 - `@grant` 只用 `GM_addStyle` / `GM_getValue` / `GM_setValue`，没有 `GM_xmlhttpRequest`；
-  **脚本自身不发起任何网络请求**，也不上报任何数据。
-- 唯一的网络行为都是你自己触发的：X 自己的操作（发帖 / 搜索 / 导航），脚本不代你发起任何请求。
+  **脚本自身不发起任何网络请求**，也不上报任何数据。（头部那条 `@updateURL` 是给脚本管理器
+  读的：检查更新由它自己发起，脚本运行时碰不到网络。）
+- 除脚本管理器的更新检查外，唯一的网络行为都是你自己触发的：X 自己的操作（发帖 / 搜索 / 导航），
+  脚本不代你发起任何请求。
 - 设置只写在本机两处（脚本管理器存储 + 该站点的 `localStorage`），键名统一带
   `twitter-enhancer:` 前缀，手动删掉即恢复默认。
 

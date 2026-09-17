@@ -93,14 +93,48 @@ jsdom 根本走不到。绿的含义是**未覆盖**，不是不需要。三条�
 
 ## 迭代与分发
 
+### 本地迭代
+
 **不要用 vite-plugin-monkey 的 dev 模式**（裸 `vite` / `vite dev`，或预览页里那个 `server:` 开头的
 "安装"按钮）：它把 `<script type="module" src="http://127.0.0.1:5173/__vite-plugin-monkey.entry.js">`
 注入页面，而 x.com 的 CSP 不含 localhost，注入被浏览器直接拦掉 —— 页面上等于没加载脚本，
 控制台只剩一条 CSP violation。本地迭代就是 `npm run dev`（只重建 dist）→ 把
 `dist/twitter-enhancer.user.js` 重新导入脚本管理器（手动一步，无 HMR）。
 
-分发：构建产物交给脚本管理器（用户用脚本猫，自动同步 dist，刷新即生效）。
-`grant` 由 `vite.config.ts` 声明（当前 `GM_addStyle` / `GM_getValue` / `GM_setValue`），
+### 发版
+
+产物头部声明了固定的更新源：`@updateURL` 与 `@downloadURL` 都指向 README「安装」一节的 raw 直链
+（值在 `vite.config.ts` 顶部的 `RAW_DIST`，与 README 是同一份地址）。所以「用户当初从哪装的」
+不再决定他从哪拿新版；但**判不判有新版本仍然只看 `vite.config.ts` 的 `version`** ——
+推了代码不 bump 它，所有人都会看到「无可用更新」。
+
+| 用户怎么装的 | 新版本怎么到手 | 要 bump `version` 吗 |
+| --- | --- | --- |
+| 本机（脚本猫同步本地 dist） | 重新构建即同步，刷新生效 | 不用（本地同步不看版本号） |
+| 从 README 的 raw 地址在线安装 | 管理器按间隔回 `@updateURL` 取 | **要** |
+| 手动粘贴 / 下载文件安装 | 管理器**可能**照 `@updateURL` 检查 —— 这一格没实测过，没把握就按第 4 步自己验 | **要** |
+
+在线发版四步：
+
+1. 改 `vite.config.ts` 的 `version`（产物头部与它同源，改一处就够）；
+2. `npm run verify`；
+3. `src/` / `vite.config.ts` / 重建后的 `dist/twitter-enhancer.user.js` **一起**提交 ——
+   产物不入库，raw 地址就拿不到新文件；
+4. push 后回读一次线上头部，确认 CDN 换掉了旧文件（另有几分钟缓存，还是旧号就等会儿再看）：
+
+   ```powershell
+   $u = 'https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-enhancer/dist/twitter-enhancer.user.js'
+   (Invoke-RestMethod $u) -split "`n" | Select-String '@version|@updateURL'
+   ```
+
+到手时机不受我们控制：轮询间隔在用户的脚本管理器里（篡改猴默认约一天），不存在"推送即达"。
+想确认在线那条链路真的通，用装着的管理器点一次「检查更新」比读文档可靠。
+
+改 `RAW_DIST` / `REPO_URL`（换仓库名或挪产物路径）要三处一起动：`vite.config.ts`、README 的
+安装地址、以及已安装用户手里的旧 `@updateURL`。最后这处改不到，只能过渡一版：把带**新**地址的
+产物继续发布在**旧**地址上并 bump 版本，用户从旧地址拿到这一版之后，管理器才认新地址。
+
+元数据：`grant` 由 `vite.config.ts` 声明（当前 `GM_addStyle` / `GM_getValue` / `GM_setValue`），
 新增 `GM_*` 能力要同步改这里。
 
 ## 什么时候要读别的文档

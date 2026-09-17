@@ -1,10 +1,14 @@
 // ==UserScript==
 // @name         Twitter / X 页面优化
 // @namespace    twitter-enhancer
-// @version      0.0.4
+// @version      0.0.5
 // @author       twitter-enhancer
 // @description  推特（X）网页体验优化：宽时间线 / 媒体高度钳制与单图等比 / 内容列排版（版心、焦点帖、轮播序号）/ 右侧栏显隐，开关在页内右下角设置面板
 // @license      MIT
+// @homepageURL  https://github.com/a285292107s/twitter-enhancer
+// @supportURL   https://github.com/a285292107s/twitter-enhancer/issues
+// @downloadURL  https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-enhancer/dist/twitter-enhancer.user.js
+// @updateURL    https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-enhancer/dist/twitter-enhancer.user.js
 // @match        https://x.com/*
 // @match        https://www.x.com/*
 // @match        https://twitter.com/*
