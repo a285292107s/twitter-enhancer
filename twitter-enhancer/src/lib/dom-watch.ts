@@ -1,7 +1,7 @@
 /**
  * 全局 DOM 观察调度器（单例）。
  *
- * 旧版每个功能（宽度解锁、右栏搜索、时间线重算）各自注册一个监听
+ * 旧版每个功能（宽度解锁、时间线重算……）各自注册一个监听
  * document.documentElement 的 subtree MutationObserver。X 的虚拟滚动会在滚动时
  * 高频增删节点，同一批变更被 N 个观察器重复派发，回调又各自触发全量扫描 /
  * 重建 —— 浪费且掉帧。
@@ -17,12 +17,12 @@
  *   锚点节点身份变化时在 MO 回调里同步冲刷（早于渲染帧），其余变更照旧节流。
  * - 订阅方在各自回调里只处理自己的逻辑。
  *
- * 注意：主题跟随（tweet-ui）仍需监听 html/body 的 style/class 属性变化，
+ * 注意：主题跟随（features/theme.ts）仍需监听 html/body 的 style/class 属性变化，
  * 那属于「按属性过滤、只观察两个元素」的窄观察器，不在本单例覆盖范围，
  * 也不造成滚动开销（childList 才是滚动时的噪声来源）。
  */
 
-import { SEL, LOGO_SELECTORS } from './selectors';
+import { SEL, LOGO_SELECTOR } from './selectors';
 
 export interface DomWatchDetail {
   /** 本批次累计的 mutation 记录数 */
@@ -55,13 +55,11 @@ const SAMPLE_LIMIT = 8;
  * X 的 SPA 导航会整棵卸载并重挂 app shell —— 这些节点全部换成新节点，
  * 内联样式随之丢失。
  *
- * LOGO_SELECTORS 只用于识别「导航条被整体重建」（搜索宿主挂载点随之重建）；
- * 左导航条本身的位置由 X 自己 fixed 定位，脚本不写（见 sidebar.ts）。
+ * logo 只是「导航条也被重建了」的廉价探针；左导航条本身的位置由 X 自己
+ * fixed 定位，脚本一个字节都不写（见 features/sidebar.ts）。
  */
 const PRIMARY_SELECTOR = SEL.primaryColumn;
 const SIDEBAR_SELECTOR = SEL.sidebarColumn;
-/** 左栏 logo：导航条（搜索宿主挂载点）随之整体重建，身份变化同样要立即补写 */
-const LOGO_SELECTOR = LOGO_SELECTORS[0];
 
 let lastPrimary: Element | null = null;
 let lastSidebar: Element | null = null;
@@ -73,8 +71,7 @@ let lastLogo: Element | null = null;
  *
  * 为什么必须单独判定：若等 120ms 节流批次再重写样式，用户会看到明显闪烁 ——
  * 2026-09 真机实测（1440×900，时间线点进详情推文）：新三栏行在 t+546ms 挂载时
- * 还是 X 原生布局，t+687ms 才被改成本脚本的锚定布局；左栏搜索宿主更早随导航条
- * 被替换（t+227ms），直到 t+669ms 才重新挂上。两处都是「先按 X 原生画一帧再回弹」。
+ * 还是 X 原生布局，t+687ms 才被改成本脚本的锚定布局，也就是「先按 X 原生画一帧再回弹」。
  *
  * 每次只做三个 querySelector + 一次 parentElement 读取；主列在文档序里靠前，
  * 命中即返回。滚动时（虚拟列表增删推文）这些引用都不变，不会走快路径。
@@ -192,8 +189,8 @@ export function onDomChanged(listener: DomWatchListener): () => void {
   };
 }
 
-/** 立即冲刷当前未派发的批次（回前台兜底 / 测试用） */
-export function flushDomWatch(): void {
+/** 立即冲刷当前未派发的批次（MO 快路径与回前台兜底都用它） */
+function flushDomWatch(): void {
   if (timer !== null) {
     clearTimeout(timer);
     timer = null;

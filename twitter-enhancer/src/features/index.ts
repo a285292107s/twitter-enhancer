@@ -7,8 +7,8 @@
  * **诱人** —— 下一个人会以为改这里是「关掉某个功能」的正路，实际上没有任何路径会写它。
  */
 import { enableTimelineWidth } from './timeline-width';
-import { enableTweetUi } from './tweet-ui';
-import { enableSidebarSearch } from './sidebar';
+import { enableTheme } from './theme';
+import { enableSidebar } from './sidebar';
 import { enableMediaCap } from './media-cap';
 import { enableContentColumn } from './content-column';
 import { enableSettingsPanel } from './settings-panel';
@@ -21,8 +21,8 @@ export interface Feature {
 
 export const features: Feature[] = [
   { name: 'timeline-width', enable: enableTimelineWidth },
-  { name: 'tweet-ui', enable: enableTweetUi },
-  { name: 'sidebar-search', enable: enableSidebarSearch },
+  { name: 'theme', enable: enableTheme },
+  { name: 'sidebar', enable: enableSidebar },
   { name: 'media-cap', enable: enableMediaCap },
   { name: 'content-column', enable: enableContentColumn },
   // 页内设置面板放最后：先让各功能把开关登记进设置注册表，面板首次渲染就是完整列表

@@ -22,7 +22,7 @@
    | --- | --- |
    | 判断「现在在哪一页」（Home / Profile / Status / Chat …） | `lib/page.ts` 的 `currentPageKind()` / `onPageKindChanged()` / `pagePathChanged()` |
    | 等 X 的某个元素出现（路由切走就放弃） | `lib/wait-for.ts` 的 `waitFor` / `waitForElement`（**必须给 `stopIf: pagePathChanged(path)`**） |
-   | 观察具体节点（属性变化 / ResizeObserver） | `lib/observer-scope.ts` 的 `createObserverScope()` |
+   | 观察具体节点（属性变化 / ResizeObserver） | 自己 `new` 并管好生命周期；**目标可能被 X 替换时必须能重新绑定**（三个现成形态：`media-cap` 的宿主 RO、`unlock-width` 的列容器 RO、`settings-panel` 的抽屉 RO） |
    | 知道时间线出现 / 被整层替换（标签页切换） | `lib/timeline.ts` 的 `onTimelineChanged()` |
    | 要一个 X 的选择器 | `lib/selectors.ts` 登记后引用，**不要**在功能里写字面量 |
    | 加一个可持久化的开关 | `lib/toggle.ts` 的 `createToggle()`（面板行 / 存储 / 首帧渲染 / 广播一起包掉） |

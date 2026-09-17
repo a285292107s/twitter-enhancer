@@ -19,9 +19,9 @@ main.ts
 
 各功能只订阅事件、不自己 `new MutationObserver(document.documentElement)`。新增共享观察入口时也
 收敛到这两个单例里（页面类型与时间线只是它们的订阅方，见下一节）。
-挂在**具体节点**上的窄观察器（属性过滤 / ResizeObserver）走 `lib/observer-scope.ts`。
+挂在**具体节点**上的窄观察器（属性过滤 / ResizeObserver）由各自的功能自己管理生命周期 —— 目标可能被 X 替换时，必须在重解析后重新绑定（见「不变量」一节）。
 
-## 从参考实现借来的六个模块
+## 从参考实现借来的五个模块
 
 2026-09 对照社区标准实现 [control-panel-for-twitter](https://github.com/insin/control-panel-for-twitter)
 （约 2.6k star，`script.js` 单文件 7.7k 行）后收敛出的抽象。每一层都对应参考项目里一条被反复验证的写法，
@@ -31,7 +31,6 @@ main.ts
 | --- | --- | --- |
 | `lib/page.ts` | `PagePaths` + 一堆 `isOnXxxPage()` | 收敛成**一条纯函数** `classifyPath()`（十几条分支可被门禁直接断言）+ `currentPageKind()` 缓存 + `te:page` 事件 |
 | `lib/wait-for.ts` | `getElement(selector, {stopIf})` | 多一个 `waitFor(probe)` 入口（要等的是「状态正确」而不只是「存在」，见 `lib/timeline.ts`）；轮询在后台标签页退回 `setTimeout`（rAF 被冻结） |
-| `lib/observer-scope.ts` | `observers` Map + `observeElement()` | 不只管 MutationObserver，也管 `ResizeObserver`（本项目最容易踩「盯住被替换的旧节点」的地方） |
 | `lib/timeline.ts` | `observeTimeline()` / `observeIndividualTweetTimeline()` | **不新建观察器**，改为消费 dom-watch 批次 + `te:route`（全站单观察器是硬不变量）；占位层 → 真实层的等待用 `waitFor` + `stopIf` |
 | `lib/selectors.ts` | `Selectors` 枚举 | 只登记稳定属性锚点；**结构**判据留在功能模块里（判据属于功能，不属于锚点表） |
 | `lib/style-sheet.ts` | `addStyle()` + 各 `configureXxxCss()` | 只用于「取值来自 CONFIG」的规则（见下「样式放在哪」）。**当前只有一个消费者**（设置按钮几何）—— 第二类出现之前不要再为它加能力，否则它会变成一个只有一条腿的框架 |
@@ -53,19 +52,19 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
 2. **运行时拼装的样式表（`lib/style-sheet.ts`）**：取值来自 `CONFIG` 的规则，例如设置按钮的
    尺寸 / 圆角 / 图标大小 / 兜底位置（它们与 `config.ts` 是同一份事实，写在 CSS 文件里必然漂）。
    代价是它要等一个挂载点，所以**首屏就要生效的东西不能用它**。
-3. **`:root` 内联变量（`style.setProperty('--te-*')`）**：首屏令牌（tweet-ui 的正文令牌）
-   与**被测得的几何**（`--te-timeline-width`、`--te-spine`）。后者还有一个硬理由：
-   CSS 文件里 `html[data-te-column='on']` 的特异性高于 `:root`，只有内联变量能稳定压过默认值。
+3. **`:root` 内联变量（`style.setProperty('--te-*')`）**：只给**运行时才知道的取值**用 ——
+   被测得的几何（`--te-timeline-width`、`--te-action-gap`）。静态令牌（间距梯、版心、结构色带）
+   写在 CSS 文件里（`features/theme.css`），因为它们首屏就要生效，而内联变量要等 JS 跑起来。
 
 ## 本项目自己长出来的三块地基
 
-上面那张表是「照参考实现收敛出来的抽象」（那六个模块各自只收一个概念）；
+上面那张表是「照参考实现收敛出来的抽象」（那五个模块各自只收一个概念）；
 这三块是**本项目自己的重复**收敛出来的 —— 共同点是：同一条协议曾经在多个功能里各写一遍，
 于是协议只存在于副本里。功能之间只允许经它们打交道，不要各写一份。
 
 | 模块 | 收敛掉什么 | 规矩 |
 | --- | --- | --- |
-| `lib/toggle.ts` | 七个开关各自手写的「默认值 → 首帧渲染 → `registerSetting` → 异步存储覆盖 → 写盘 → 广播」 | 新增开关只写 `createToggle({ …, apply })`，**不要**再手写 `registerSetting` + `readFlag`；存储 key 默认等于开关 id |
+| `lib/toggle.ts` | 每个开关各自手写的「默认值 → 首帧渲染 → `registerSetting` → 异步存储覆盖 → 写盘 → 广播」（收敛时是七个，现为六个） | 新增开关只写 `createToggle({ …, apply })`，**不要**再手写 `registerSetting` + `readFlag`；存储 key 默认等于开关 id |
 | `lib/gate.ts` | 「宽列是否生效」的三份判据（属性比较 / 属性 + 实测宽度 / 回调传入），以及 `'teSidebar'`、`'off'` 这类字面量副本 | 功能之间只传布尔值（`isWideTimeline()` / `setWideTimeline()` / `isSidebarHidden()` / `setSidebarHidden()`）；属性名与取值词表是它的私有实现 |
 | `lib/frame-work.ts` | 各处手写的「批次回调只收集、工作合并到下一帧」队列，以及没有 rAF 时的 setTimeout 回退 | 功能用 `createFrameQueue()`；DOM 批次 / 观察器回调里**不做**测量（`getComputedStyle` / `offsetWidth` 同样是测量），只排队 |
 
@@ -89,7 +88,8 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
   会先以非原生宽度挂载，宽度判据在那一个瞬间会把它钉成 800。
 - **左导航条不写任何样式**：X 自己的 fixed 定位已经与主列左缘对齐（`/home` 与 `/i/grok` 逐像素一致），
   覆盖它会让两个页面走两套摆放机制。
-- **不移动/不重建 React 管理的节点**（除了 `CONFIG.search.mode = 'move'` 这条已知有风险的路径）。
+- **不移动/不重建 React 管理的节点**（无例外：曾经那条 `CONFIG.search.mode = 'move'`
+  「把 X 原生搜索框搬进左栏」的路径随导航条搜索框一起删除）。
   自建节点用 `te-` 前缀的 class 与 `data-te-*` 标记，撤销时按标记清理（注意 dataset 驼峰会转成
   连字符，选择器写 `[data-te-media-capped]` 而不是 `[data-teMediaCapped]`）。
   这条同时排除了「把头像 / 名字 / 正文 / 操作栏搬进自建卡片壳」这类**视觉重排**：CSS 的 flex
@@ -148,11 +148,14 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
   （三栏 = 主列所在行里有右栏兄弟节点）。它只允许用在两类地方：路由一确定就能判、不能等 DOM 的
   场景（X Chat / Grok 先撤销宽列），以及「这一页值不值得起时间线功能」。反过来，任何需要看
   「这一页有哪些容器」的判断都要走 DOM 结构 —— 理由见上面「适用页面按 DOM 结构判」。
-- **挂在具体节点上的观察器必须走 `lib/observer-scope.ts`**：X 换掉节点时旧观察器要跟着断
-  （同名重登记会先断开旧的）。裸写 `new ResizeObserver(...).observe(node)` 的后果是
-  「旧节点上的观察器永远活着、新节点没人观察」—— sidebar 的内栏断点判定曾经就是这么坏的
-  （一个 `watching` 标志只认第一次挂载），而这类缺陷在真机上表现为「导航一次后某个自适应失效」，
-  极难回溯到观察器。
+- **挂在具体节点上的观察器必须跟着节点生命周期走**：X 的 SPA 导航 / 重渲染会把节点整棵换掉，
+  观察器若不重绑，结果是「旧节点上的观察器永远活着、新节点没人观察」，真机上表现为
+  「导航一次后某个自适应失效」，极难回溯。当前有三处形态，各自管自己的重绑与断开：
+  `media-cap` 的宿主 RO（对账时重观察）、`unlock-width` 的列容器 RO（`reset()` 里断开重建）、
+  `settings-panel` 的抽屉 RO（`observedDrawers` 记录并重绑）。
+  主题检测（`features/theme.ts`）盯的是 `html` / `body`，两者全程稳定，用裸
+  `MutationObserver` 即可，没有重绑需求。历史教训：sidebar 内栏的图标条断点判定用了一个
+  「只认第一次挂载」的标志，导航后静默失效。
 - **等 X 的元素用 `lib/wait-for.ts`，并且必须给 `stopIf`**：用 `lib/page.ts` 的
   `pagePathChanged(path)` 构造。没有 `stopIf` 的等待会在导航后一直轮询，
   最终在另一个页面上命中间名元素。判据顺序固定为「先探测、后 stopIf」：目标已经就绪时，
@@ -182,9 +185,21 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
   任何「内部含有某节点」的谓词都会在那一瞬间为 false，而扫描过的祖先不会再回看。
   要么让判据来自**遍历方向**（从内容向上），要么在内容到达时重新评估。
 - **观察器盯着「当前的那一层」**：X 会用新的节点替换时间线滚动层、主列、三栏行、导航内栏，
-  所以「观察一次就完事」的写法都会在第一次导航后失效（sidebar 的内栏 ResizeObserver、
-  旧的「只认第一次挂载」标志）。观察目标每次重解析、观察器走同名重登记（`lib/observer-scope.ts`），
+  所以「观察一次就完事」的写法都会在第一次导航后失效（历史教训：sidebar 内栏的
+  ResizeObserver + 一个「只认第一次挂载」的标志）。观察目标每次重解析、必要时重新绑定，
   参照 `lib/timeline.ts` 的 `te:timeline` 事件。
+- **「含正文」这条判据认不出 X 的长文（Article）**：媒体钳制的宿主是「向上第一个够宽且
+  不含 `tweetText` 的祖先」，而长文阅读视图（`article[data-testid="twitterArticleReadView"]`）
+  的正文是它自己的富文本层、没有 `tweetText` —— 正文图片的行宿主会被正常选中，钳制的
+  **祖先链**上却挂着承载整篇正文的容器（实测 158 个子块 / 23177px），被压成预算高度后正文
+  溢出、cell 塌到 1401px，虚拟列表把后续回复摆在文章上面（2026-09-17 用户实测
+  「文章页面，文章无法完整显示」）。结构排除写在 `media-cap.ts` 的 `findHost`：
+  正文是**文档**，不是推文的媒体行。
+- **负 margin 会掉进 X 的 flex 布局**：焦点帖 Hero 色带曾用 `::after` + 左右 -16px 负 margin
+  铺满整列，而焦点帖的内容外层是 `flex-grow` 项 —— 负 margin 制造出的 32px 自由空间被它
+  吸收，内容因此比内容盒宽 32px、右侧被 `article` 的 `overflow:hidden` 裁掉
+  （2026-09-17 实测正文 978 vs 内容盒 946）。要「铺满整列」就用元素自己的背景画
+  （`background-size: 100% …` + `background-position: bottom left`），不要用负 margin。
 
 ## 视觉重排为什么一律用 CSS（2026-09-15 复核）
 
@@ -197,13 +212,13 @@ X 的时间线滚动层会被**整层替换**：先挂一个空壳（没有内�
   所以「大幅改排版」= 搬节点，这是唯一路径 —— 也是本项目唯一拒绝的方向。
 - **搬节点后没有便宜的还原路径**。媒体/操作栏被搬走后，X 重渲染或路由切换会把节点放回去，
   遗留的自建壳与空的原文案会同时存在；`clearMarks()` 那种「删属性」级别的撤销对搬过的节点
-  不成立，开关一关就是一棵半拆的树。已知例外 `search.mode='move'` 的代价就是这个（见 config 注释）。
+  不成立，开关一关就是一棵半拆的树。
 - **媒体那条链已经在 `media-cap` 里按需闭合了**，不需要靠搬 DOM 实现「通栏」：比例盒是
   `padding-bottom` 撑高的，只改 `img` 尺寸会让容器留着旧比例（实测 `tweetPhoto` 608×540、
   它上面两层仍是 976×540），所以 `run` 会把宿主 + 宿主之上的纯媒体祖先**逐层写死成同一尺寸**。
 - **布局高度是虚拟列表的输入**。`cellInnerDiv` 的高度参与滚动位置计算，改外层布局会出现
   空白洞 / 重复推 / 滚不动；而 `article` 内部重排只要不动高度来源就安全 —— 这也正是本项目
-  所有排版改动都收在 `article` 内部的原因（见 `tweet-ui.css` / `content-column.css` 头部约束）。
-- **文案层已经用不插节点的方式做到了分层**：正文按 emoji / 短句 / 长文分档（`data-te-caption`）、
-  焦点帖立起来（`data-te-hero`）、轮播序号用 `::after` + `attr()`（`data-te-carousel`）。
-  这些是「改排版」在遵守红线前提下能拿到的真实收益，也是后续默认的扩展方式。
+  所有排版改动都收在 `article` 内部的原因（见 `content-column.css` 头部约束）。
+- **文案层已经用不插节点的方式做到了分层**：焦点帖立起来（`data-te-hero`）、
+  轮播序号用 `::after` + `attr()`（`data-te-carousel`）。这些是「改排版」在遵守红线前提下
+  能拿到的真实收益，也是后续默认的扩展方式。

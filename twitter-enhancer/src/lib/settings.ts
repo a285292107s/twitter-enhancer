@@ -7,7 +7,7 @@
  * 页内面板统一渲染成弹窗里的开关行；面板只读这张表，不反向依赖任何功能模块 ——
  * 新增功能只要 registerSetting 一条，就自动出现在设置里。
  *
- * 状态刷新：开关可能从面板点击切换，也可能从页面快捷键（Alt+U / Alt+B）切换，
+ * 状态刷新：开关可能从面板点击切换，也可能从页面快捷键（Alt+B）切换，
  * 两条路径都经过 notifySettingsChanged()，面板据此同步开关的 aria-checked。
  *
  * **新增开关不要直接调 registerSetting**：走 `lib/toggle.ts` 的 `createToggle()` ——
@@ -24,7 +24,7 @@ export interface SettingItem {
   label: string;
   /** 一句话说明「开了会怎样」，不写「是否…」式问句 */
   description: string;
-  /** 键盘快捷键提示（可选，如 'Alt+U'） */
+  /** 键盘快捷键提示（可选，如 'Alt+B'） */
   shortcut?: string;
   /** 当前是否开启 */
   isEnabled: () => boolean;

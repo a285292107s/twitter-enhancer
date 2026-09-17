@@ -152,52 +152,73 @@ X 三栏的内容区是一个固定盒子：主列 600 + 间距 30 + 右栏 350�
 GIF 帖 696×580、单图帖 5 次均 653×580、4 图轮播 4 格统一 313×574、`/home` 内容列 978
 （未退回 600）；残存扫描（超预算 / 非预期黑边）为 0。
 
-## 推文 UI：令牌与硬约束
+## 主题与共享令牌
 
-令牌定义在 `src/features/tweet-ui.css`（`:root` 亮色默认 + `html[data-te-theme='light|dim|dark']` 分支），
-取值集中在 `src/config.ts` 的 `tweetUi` 段。这是注入第三方站点的样式层，不是自建页面：
+这一层原来叫「推文新样式 + 推文留白」，2026-09-16 按用户要求**整体移除**（连同
+「短帖大字号」「导航条搜索框」）。留下的只有两件事，写在 `src/features/theme.css` + `theme.ts`：
 
-- **不换字体族**（X 用 TwitterChirp）、**不换品牌语义色**（Reply `#1d9bf0` / Repost `#00ba7c` /
-  Like `#f91880` 必须在 Light / Dim / Dark 三套主题下都是 X 的原值，可动的是次要文字的对比度）。
-- 主题由 `tweet-ui.ts` 检测 `body` 背景色后写入 `html[data-te-theme]`，CSS 分支消费；
-  规则统一挂在 `html[data-te-ui='on']` 下，`Alt+U` 可整体关闭。
-- 只锚定 `data-testid`；只动 `color / background-color / border-color / opacity / 圆角`，
-  **不动画 `width` / `height`**；动效 `--te-dur: 180ms` + `--te-ease: cubic-bezier(.2,0,0,1)`，
-  `prefers-reduced-motion: reduce` 下全部压掉。
-- 正文 `16px / 1.5`、行长 `--te-measure: 72ch`：列宽铺满后英文行长会涨到约 110 字符，
-  72ch 兜住可读性上限（中文约 36 字/行）；媒体仍铺满整列，只有正文限宽。
-  计数数字用 `tabular-nums`，避免刷新时跳动。
-- 操作栏命中区域 ≥36×36；**绝不移除 focus ring**（`--te-focus` 2px outline + 2px offset）。
-- **媒体圆角不自己加**（2026-09-14 实测）：X 原生把一块媒体做成「外层包裹 8px 圆角 +
-  `overflow: hidden`，内部切片 `tweetPhoto` 直角」，旧版本给每片套 16px 圆角 + 6px 缝，
-  眼睛读到的是「4 张卡」。现在媒体只保留 `overflow: hidden`，圆角与暗色描边一律还给 X。
-- 间距梯 `--te-gap-1..5 = 8/12/20/32/56`：只用于「层级间距」；单元格内边距
-  （`12px 16px 8px`）是 X 的实测值，写死在规则里，不参与令牌。
+- **主题检测**：`theme.ts` 读 `html` 的 `color-scheme`（读不到再回退 `body` 背景亮度）判出
+  Light / Dim / Dark，写在 `html[data-te-theme]` 上，CSS 的主题分支消费
+  （`theme.css` 的 `--te-surface-sunken`、`settings-panel.css` 的 `--te-set-*`）。
+- **共享令牌**：间距令牌（当前只剩 `--te-gap-1`(8) 与 `--te-gap-3`(20) 有消费方 ——
+  另三档随推文样式层一起移除，见下）、版心 `--te-spine: 764px`、结构色带 `--te-surface-sunken`。
+  **只放变量声明，不放任何选择器规则** —— 这里一出现观感规则，就会重新长出一个「推文新样式」。
+
+注入第三方站点的样式层仍然守这几条红线：**不换字体族**（X 用 TwitterChirp）、
+**不换品牌语义色**（Reply `#1d9bf0` / Repost `#00ba7c` / Like `#f91880`）、
+**不移除 focus ring**、只锚 `data-testid`。
+
+## 推文样式层为什么被移除（2026-09-15 审计 → 2026-09-16 移除）
+
+2026-09-15 的审计（方法：同一 headless profile 先量 X 原生值、再按开关矩阵量我们改后的值；
+探针 `.playwright-cli/audit*-tweetui.mjs`，不入库）结论是：**这一层里与 X 原生逐值相同或
+纯属叠加的部分，远多于它真正改掉的部分** —— 自绘的单元格分隔线（与 X 自己那条相邻成 2px 双线）、
+引用卡框（顺手把名字行里 1em 的认证徽章撑成 42×42 方框）、`share` / `views` 两组死选择器
+（现版本这两个 testid 不存在）、操作栏 hover 圆底（X 自己在更内层已经画过）都在那次被删。
+剩下的部分（正文 16px/1.5/72ch、单元格 12/16/8 内边距 + 36px 命中区）才是这一层真正的改动。
+
+2026-09-16 用户看完观感后决定把这一层整个移除，于是正文回到 X 原生的字号与不限宽，
+「窄文字 / 宽图版」的对照只剩操作栏那一条 764px 版心（`--te-spine` 也从「实测 72ch 的解析值」
+退回静态值，见 `content-column-design.md` §8）。
+
+由此仍然生效的两条：**新增规则前先量 X 原生值**（同值就是复刻，别写）；
+**观感类新增元素各自带开关**（现在还活着的例子只有轮播角标 `carousel-index`）。
+
+同一次审计里发现、至今仍没做的几件事（留着，别当成已修）：
+
+- **设置按钮在 1280 视口压住媒体右下角约 58px**（content-column-design.md 的 P7，2026-09-14 实测）。
+  它是面板的入口，不做开关；真要修是「按媒体矩形自动避让」，属于独立一件事。
+- **间距令牌已经收窄到「有人用」**：五档梯子（8/12/20/32/56）的消费方本来是推文样式层，
+  它移除后只剩内容列的两处（轮播角标 8、焦点帖色带 20），2026-09-16 把那三档没有消费方的
+  声明删掉了。**要新增一档时连消费方一起加**，别再先把梯子铺回去。
+- **版心（764px）与焦点帖 Hero 仍捆在 `content-column` 里**：它们是最结构性的两个决定，
+  想单独关需要再拆属性门控；用户只要求拆过字号分层与轮播角标，故未动。
 
 ## 内容列排版（2026-09-14 实测，见 docs/content-column-design.md）
 
 `src/features/content-column.ts` + `content-column.css`，开关 `content-column`；
 `media-fit`（单图等比）在 `media-cap.ts` 里。标本：`Sena_8ito` 那条 4 图竖图帖。
 
-- **版心 `--te-spine: 764px`**：正文、操作栏共用一条 764px 右边界，昵称行与媒体保持整列宽。
+- **版心 `--te-spine: 764px`**：操作栏收进 764px，昵称行与媒体保持整列宽。
   为什么不用 `72ch`：`ch` 相对元素**自身**字号解析，操作栏继承 X 的 15px 时 72ch 只有 633px，
-  与正文的 764px 对不齐。**发布者是把 `--te-measure` 写下去的那一层**（`tweet-ui.ts` 的
-  `publishSpine`）：它读真实正文元素 `max-width` 的解析值写进 `--te-spine`，短句帖正文是 20px，
-  按 fontSize 换算回 16px；CSS 里（`tweet-ui.css`）留 764px 默认值覆盖首屏推文出现前的空窗。
-  消费方 content-column 只读这个令牌，不再自己反推 —— 否则「这个 px 值是什么」要靠两个功能
-  的开关状态互相猜，切换顺序一变就会停在兜底值上。
+  与正文的 764px 对不齐。这个值是 16px 字体下 72 个字符宽的实测取整（2026-09-14 真机 763.776px）。
+  **曾经由测量层覆盖**：写 `--te-measure: 72ch` 的那一层（tweet-ui）读真实正文元素 `max-width`
+  的解析值写进 `--te-spine`；2026-09-16 推文新样式整体移除后正文不再限宽、测量失去样本，
+  版心回到 `theme.css` 里的静态 764px（消费方 content-column 只读令牌，不自己反推）。
   **注意不能用「量 72 个 0」反推**：同一字体下 72 个 0 实测 785px，而 72ch 解析为 764px。
 - **版心不需要 `!important`**：X 给操作栏写的 `max-width: 600px` 是普通声明，本选择器的
   特异性已经高过它。曾经要压的是宽度解锁器给同一元素打的 `max-width: 100% !important` ——
   解锁器现在按角色判定（操作栏不承载内容单元），这条军备竞赛随之消失。
 - **操作栏保留 X 的等距分布**：它的按钮是 `flex: 1 1 0%`，强行左聚会在详情页留出半行空白；
   版心只负责把这条轴从 946px 收到 764px。
-- **内容语义** `article[data-te-caption] = none | emoji | short | long`：emoji 在 X 里是行内 `<img>`，
-  `textContent` 长度为 0，所以「emoji 独占正文」必须靠 img 计数单独识别（标本正文就是 6 个 emoji）。
-  emoji → 24px/1.1，短句（≤32 可见字符）→ 20px/1.35，长文 → 16px/1.5。
+- **内容语义（已移除）**：`article[data-te-caption] = none | emoji | short | long` 与
+  emoji 24px / 短句 20px 的字号规则随「短帖大字号」一起下线（2026-09-16 用户要求）。
+  留在这里的判据供将来复用：emoji 在 X 里是行内 `<img>`、`textContent` 长度为 0，
+  所以「emoji 独占正文」必须靠 img 计数单独识别，不能只看文本长度。
 - **焦点帖**：详情页里 `article` 内存在 `a[href]` 的路径 === `location.pathname` 的那一条
   （2026-09-14 实测：焦点帖命中、同页 45 条回复全部不命中）。它的 `cellInnerDiv` 去掉下边界线，
-  改用 article 结尾的 8px `--te-surface-sunken` 色带 + 20px 上内边距把主角立起来。
+  改用 article 结尾的 8px `--te-surface-sunken` 色带 + 20px 上内边距把主角立起来
+  （色带 2026-09-17 改成用 article 自己的背景画，理由见文末同名一节）。
 - **轮播序号**：多图轮播在媒体宿主上写 `data-te-carousel="3/4"`，CSS 用 `::after` + `attr()` 画角标；
   滚动时只改属性值。**不插节点**（React 树里插节点的回收冲突风险不值得）。
 - **`media.cap.fit`（默认开）**：X 用百分比 padding 比例盒把单图铺满列宽，只压宿主高度会让图片
@@ -278,4 +299,39 @@ GIF 帖 696×580、单图帖 5 次均 653×580、4 图轮播 4 格统一 313×57
   `findHost` 现在跳过 `ScrollSnap-List` 的子孙（轮播列表自身仍可作宿主），
   `fitApplies` 也改判「媒体自己是否在轮播里」而不是「宿主内部有没有轮播」——
   X 逐格渲染时宿主可能**就是**某张格，轮播在它的祖先里。
+- **长文（Article）正文里的媒体整体排除**（2026-09-17 用户实测反馈「文章页面，文章无法
+  完整显示」，标本 `/yupi996/status/2100405798681862604`，1440 视口）：X 的长文阅读视图
+  （`article[data-testid="twitterArticleReadView"]`）里**没有** tweetText 锚点，于是
+  「宿主 = 媒体向上第一个够宽且**不含正文**的祖先」这条判据在这里失效 —— 正文图片的行宿主
+  被正常选中（实测写前 oh=653，躲过了「超过 2.5 屏不是媒体区」那条保护），而钳制时那条
+  **祖先链**（宿主 → … → article/cellInnerDiv 为止）上挂着承载**整篇正文**的容器
+  （实测 158 个子块、写前 oh=23177），被写成 `height: 580px`。后果：正文从盒子里溢出，
+  虚拟列表按被压短的 cell（1401px）摆放后续位置 → 回复盖在文章上、文章读不全
+  （docH 4444；正常 24590+，X 原生 600 列下 20175）。
+  现在 `findHost` 对 `SEL.articleReadView` 里的媒体直接返回 null：正文是**文档**，不是推文的
+  媒体行 —— 与「轮播内部不作为宿主」同属结构排除（判据是稳定 testid，不是尺寸或高度）。
+
+## 焦点帖 Hero 色带为什么不用负 margin（2026-09-17 实测）
+
+起因：用户报「文章页面，文章无法完整显示」。同一次排查里查出**两条独立缺陷**，
+媒体钳制那条记在上面「长文（Article）正文里的媒体整体排除」，这条是另一条。
+
+- 旧实现是 `article[data-te-hero]::after` + `margin: var(--te-gap-3) -16px 0`：靠左右各
+  -16px 负 margin 吃掉 article 的内边距，让 8px 色带铺满整列。
+- **负 margin 会掉进 X 的 flex 布局**（X 给焦点帖内容用的是 flex 容器，内容外层是
+  `flex-grow` 项）：负 margin 让这一行的「自由空间」凭空多出 32px，被 `flex-grow` 项吸收 ——
+  实测 1440 视口（`/leijun/status/2100538193041142162`）焦点帖**正文 380..1358 = 978px**，
+  而内容盒只有 **946px**（article 978 − 左右各 16）；正文右侧 16px 落在 article 的
+  `overflow:hidden` 之外，**被裁掉**。长文页更狠：整篇正文的容器被撑到 978，右侧同样被裁
+  （截图里右侧文字缺半个字）。单变量验证：运行时把那条 `::after` 设成 `display:none`，
+  正文立刻回到 946。
+- 现在色带画在 article 自己的背景上：`background-image` 用 `--te-surface-sunken` 的单色
+  `linear-gradient` + `background-size: 100% var(--te-hero-band)` + `background-position: bottom left`，
+  高度由 `padding-bottom: calc(var(--te-gap-3) + var(--te-hero-band))` 留出。
+  铺满的矩形与旧实现**完全相同**（padding box = 内容盒 946 + 左右 16 = 978），
+  但背景不参与 flex 布局，总高度也不变（间距 20 + 色带 8 = 28px）。
+- 色带高度收进共享令牌 `--te-hero-band`（消费方只有这一条规则，见 `features/theme.css`）。
+- **本文档与 `content-column-design.md` 里 2026-09-14 那批「媒体行 978」是在泄漏期间量到的**：
+  焦点帖内容的真实宽度是内容盒 **946**（与 X 原生一致 —— X 原生 600 列下焦点帖媒体行就是
+  内容宽 566）。列宽 978 本身没变，变的是「列里的内容不再溢到 article 的 16px 内边距上」。
 

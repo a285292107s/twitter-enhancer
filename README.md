@@ -1,6 +1,6 @@
 # Twitter / X 页面优化（油猴脚本）
 
-把 x.com 的时间线放宽、把推文排版理顺、把一屏放不下的超高媒体压回一屏。
+把 x.com 的时间线放宽、把推文按版心排齐、把一屏放不下的超高媒体压回一屏，并按需收起右侧栏。
 
 **纯本地运行**：没有任何网络请求、没有统计埋点，只改页面的 DOM 和本机存储。开关都在页面里
 （右下角设置按钮），随时可以逐个关掉对比效果。
@@ -11,13 +11,12 @@
 | --- | --- | --- | --- |
 | 布局 | 宽时间线 | 开 | 主列铺满 X 的内容区（右栏显示时最多放宽到 800px），列宽从 600 → 980 |
 | 布局 | 显示右侧栏 | 关 | 关掉后隐藏右栏，把横向空间让给主列；右栏显示时把它钉在主列右侧 30px |
-| 布局 | 导航条搜索框 | 开 | 在左栏 logo 右侧放一个搜索框（回车跳搜索页），右栏隐藏后也能搜索；`/` 键聚焦它 |
-| 内容 | 推文新样式 | 开 | 正文 16px / 行高 1.5 / 版心 72ch，重绘操作栏、引用卡片与媒体圆角；跟随 Light / Dim / Dark 三套主题 |
 | 内容 | 媒体高度钳制 | 开 | 宽列下超高竖图 / 多图轮播按视口高度压到一屏内，不再需要滚动看完整张图 |
 | 内容 | 单图等比 | 开 | 超预算的单图按原图比例缩到预算内并居中（不裁切、不压扁、不留黑边） |
-| 内容 | 内容列排版 | 开 | 正文按内容分层（emoji / 短句 / 长文）、操作栏收进版心、焦点帖加结构分隔、多图轮播带 `3/4` 序号 |
+| 内容 | 内容列排版 | 开 | 操作栏收进 764px 版心、焦点帖加结构分隔 |
+| 内容 | 轮播序号 | 开 | 多图轮播右上角显示 `3/4` 角标（X 原生没有这个元素） |
 
-页内快捷键：`Alt+U` 开关推文新样式，`Alt+B` 开关右侧栏（用来即时对比前后效果）。
+页内快捷键：`Alt+B` 开关右侧栏（用来即时对比前后效果）。
 
 设置即时生效并保存在本机：脚本管理器存储与 `localStorage` **双写**（换浏览器 / 清掉存储即恢复默认）。
 
@@ -64,7 +63,7 @@ https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-en
 
 - `@grant` 只用 `GM_addStyle` / `GM_getValue` / `GM_setValue`，没有 `GM_xmlhttpRequest`；
   **脚本自身不发起任何网络请求**，也不上报任何数据。
-- 唯一的网络行为是你自己触发的：在自建搜索框里回车会跳到 `https://x.com/search?q=...`。
+- 唯一的网络行为都是你自己触发的：X 自己的操作（发帖 / 搜索 / 导航），脚本不代你发起任何请求。
 - 设置只写在本机两处（脚本管理器存储 + 该站点的 `localStorage`），键名统一带
   `twitter-enhancer:` 前缀，手动删掉即恢复默认。
 
@@ -77,9 +76,9 @@ https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-en
 ```bash
 cd twitter-enhancer
 npm install
-npm run verify      # 交付前必跑：tsc + 构建 + jsdom 回归（310 项）
+npm run verify      # 交付前必跑：tsc + 构建 + jsdom 回归（298 项）
 npm run dev         # 只重建 dist（vite build --watch）
-npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.com（89 项）
+npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.com（91 项）
 ```
 
 > **不要**用 `vite` / `vite dev` 的开发模式迭代：它注入的 `<script type="module" src="http://127.0.0.1:5173/...">`
@@ -90,8 +89,8 @@ npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.
 | 层 | 覆盖 | 命令 |
 | --- | --- | --- |
 | 类型 + 构建 | `tsc` 严格模式（`noUnusedLocals` 等）+ 打包 | `npm run verify` |
-| jsdom 回归 | 页面类型分类、等待器、时间线包装层、宽度解锁、媒体钳制、内容列排版、设置面板契约（310 项） | 同上 |
-| 真机几何 E2E | 真实布局引擎 + 当前 x.com DOM：列宽几何、SPA 切换零布局抖动、媒体钳制、版心（89 项） | `npm run e2e:real` |
+| jsdom 回归 | 页面类型分类、等待器、时间线包装层、宽度解锁、媒体钳制、内容列排版、设置面板契约（298 项） | 同上 |
+| 真机几何 E2E | 真实布局引擎 + 当前 x.com DOM：列宽几何、SPA 切换零布局抖动、媒体钳制、版心（91 项） | `npm run e2e:real` |
 
 **注意夹具的边界**：jsdom 回归跑的是我们自己的夹具，X 改版它一条都不会红 —— 能发现
 「X 改版导致功能静默失效」的只有真机 E2E。仓库自带
@@ -107,7 +106,7 @@ npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.
 | [`twitter-enhancer/docs/architecture.md`](./twitter-enhancer/docs/architecture.md) | 动 DOM 观察器、路由 / 页面类型 / 时间线包装层、宽度与布局门控 |
 | [`twitter-enhancer/docs/development.md`](./twitter-enhancer/docs/development.md) | 加功能、加开关、跑门禁、发版 |
 | [`twitter-enhancer/docs/design-notes.md`](./twitter-enhancer/docs/design-notes.md) | 列宽、媒体钳制、推文与设置面板外观（取值都带实测日期） |
-| [`twitter-enhancer/docs/content-column-design.md`](./twitter-enhancer/docs/content-column-design.md) | 内容列排版（版心 / 内容语义 / 焦点帖 / 单图等比） |
+| [`twitter-enhancer/docs/content-column-design.md`](./twitter-enhancer/docs/content-column-design.md) | 内容列排版（版心 / 焦点帖 / 轮播序号 / 单图等比） |
 | [`twitter-enhancer/docs/browser-automation.md`](./twitter-enhancer/docs/browser-automation.md) | 要用浏览器验证、处理登录态、或看定时漂移探测怎么跑 |
 
 ## 致谢

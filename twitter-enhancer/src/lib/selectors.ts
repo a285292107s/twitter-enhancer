@@ -24,6 +24,11 @@ export const SEL = {
   cell: '[data-testid="cellInnerDiv"]',
   /** 推文本体 */
   tweet: 'article[data-testid="tweet"]',
+  /**
+   * 长文（X 的「文章」）阅读视图：正文是它自己的富文本层，里面**没有** tweetText 锚点。
+   * 媒体钳制据此把整块正文交回 X 原生（理由见 features/media-cap.ts 的 findHost）。
+   */
+  articleReadView: 'article[data-testid="twitterArticleReadView"]',
   /** 推文正文（媒体钳制用它排除「含正文的祖先」，内容列排版用它分类） */
   tweetText: '[data-testid="tweetText"]',
   /** 单图 / 多图媒体 */
@@ -32,8 +37,6 @@ export const SEL = {
   videoPlayer: '[data-testid="videoPlayer"]',
   /** 多图轮播的滚动列表 */
   scrollSnapList: '[data-testid="ScrollSnap-List"]',
-  /** X 原生搜索输入框（sidebar 的 move 模式搬它） */
-  searchInput: '[data-testid="SearchBox_Search_Input"]',
   /** 右下角 Grok 抽屉容器（设置按钮以它的上缘定位） */
   grokDrawer: '[data-testid="GrokDrawer"]',
   /** Grok 抽屉头（收起态就是那个 55×55 的悬浮按钮，设置按钮镜像它的外观） */
@@ -45,33 +48,12 @@ export const SEL = {
 } as const;
 
 /**
- * 左导航条：`aria-label` 是本地化文案（中文界面为「主要」），所以按优先级回退。
- * 末尾那个 `nav[role="navigation"]` 是最后的兜底 —— 比它更弱的判据（按宽度 / 按位置猜）
- * 一律不要写：猜错会把「主页」导航项当成导航条容器（见 features/sidebar.ts 的踩坑记录）。
+ * logo 链接：`aria-label` 随品牌改过（Twitter → X），当前值是 `X`。
+ *
+ * 消费方只有一个 —— `lib/dom-watch.ts` 的结构性锚点判定（logo 身份变化 = 导航条被整体重建）。
+ * 它只用于**身份比对**，不需要回退链：匹配不到时降级为「锚点未变化」，
+ * 那批变更照旧走 120ms 节流冲刷，不会漏补偿（只是慢一拍）。
+ * 另有 `a[href="/home"]` 这类更弱的候选，但按位置/宽度猜的判据一律不要写
+ * （见 features/sidebar.ts 记的踩坑：猜错会把「主页」导航项当成导航条容器）。
  */
-export const NAV_SELECTORS: readonly string[] = [
-  'nav[aria-label="Primary"]',
-  'nav[aria-label="主要"]',
-  'nav[role="navigation"]',
-  'header[role="banner"] nav',
-  '[data-testid="SideNav"]',
-];
-
-/** logo 链接：X 的 `aria-label` 随品牌调整过两次（Twitter → X），同样逐个回退 */
-export const LOGO_SELECTORS: readonly string[] = [
-  'a[aria-label="X"]',
-  'a[aria-label="Twitter"]',
-  'a[href="/home"]',
-];
-
-/** 在一组回退选择器里取第一个命中的元素（`root` 默认整个文档） */
-export function firstMatch<T extends Element = HTMLElement>(
-  selectors: readonly string[],
-  root: ParentNode = document,
-): T | null {
-  for (const selector of selectors) {
-    const el = root.querySelector<T>(selector);
-    if (el) return el;
-  }
-  return null;
-}
+export const LOGO_SELECTOR = 'a[aria-label="X"]';

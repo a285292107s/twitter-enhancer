@@ -22,18 +22,7 @@ export const CONFIG: {
    * 改列宽时判据跟着走。这个常量只在**读不到**原生列宽时兜底。
    */
   lockedWidthRange: [number, number];
-  /** 推文 UI 重设计（令牌与约束见 features/tweet-ui.css 头部，取值理由见 docs/design-notes.md） */
-  tweetUi: {
-    /** 是否默认启用（可用 Alt+U 在页面上实时切换） */
-    enabledByDefault: boolean;
-    /** 正文正文字号（px），X 默认 15 */
-    bodyFontSize: number;
-    /** 正文行高，X 默认约 1.3125，宽列下偏紧 */
-    bodyLineHeight: number;
-    /** 正文最大行长，用于兜住宽列下的可读性上限；设为 'none' 则不限制 */
-    measure: string;
-  };
-  /** 右侧栏与搜索（详见 features/sidebar.ts） */
+  /** 右侧栏显隐（详见 features/sidebar.ts） */
   sidebar: {
     /** 是否默认隐藏右侧栏（可用 Alt+B 在页面上实时切换） */
     hiddenByDefault: boolean;
@@ -49,8 +38,6 @@ export const CONFIG: {
      * （`目标宽 + 右栏可见外宽`）。同一个事实写两份必然漂，所以它是配置项。
      */
     gap: number;
-    /** 左栏内栏宽度低于该值（px）视为「图标条」：放不下输入框，隐藏搜索框 */
-    compactWidth: number;
   };
   /** 媒体高度钳制（详见 features/media-cap.ts）：宽列下超高竖图/轮播行不超出一屏 */
   media: {
@@ -102,27 +89,8 @@ export const CONFIG: {
     enabledByDefault: boolean;
     /** 操作栏图标成组后的组内间距（px）：764 版心内 6 个图标不拥挤 */
     actionGap: number;
-    /** 「短文案」阈值：可见字符数 ≤ 该值时按 lede 排版（emoji 记 0 字符，单独归类） */
-    shortMaxChars: number;
-    /** emoji 独占正文时的字号（px）：当标题行用，不是段落 */
-    emojiFontSize: number;
-    /** 短文案字号（px）：当导语用 */
-    shortFontSize: number;
-    /** 多图轮播在媒体右上角显示「3/4」序号 */
+    /** 多图轮播在媒体右上角显示「3/4」序号（独立开关 `carousel-index` 的默认值） */
     carouselIndex: boolean;
-  };
-  /** 搜索框迁移到左侧导航条 */
-  search: {
-    /** 是否在导航条 logo 右侧显示搜索框（可在页内设置面板开关） */
-    enabled: boolean;
-    /**
-     * custom：自建输入框，回车跳转到 /search?q= —— 稳定，不触碰 X 的 React 树（默认）
-     * move：把 X 原生搜索框（含实时建议下拉）搬进左栏 —— 功能更强，
-     *       但移动 React 管理的节点，在 X 重渲染侧栏时存在 DOM 冲突的小概率风险
-     */
-    mode: 'custom' | 'move';
-    /** 占位文案 */
-    placeholder: string;
   };
   /** 页内设置面板（右下角设置按钮 + 弹窗，取代旧版油猴菜单开关） */
   settings: {
@@ -151,17 +119,10 @@ export const CONFIG: {
   timelineWide: true,
   timelineBreakpoint: 1095,
   lockedWidthRange: [560, 660],
-  tweetUi: {
-    enabledByDefault: true,
-    bodyFontSize: 16,
-    bodyLineHeight: 1.5,
-    measure: '72ch',
-  },
   sidebar: {
     hiddenByDefault: true,
     anchorSidebar: true,
     gap: 30,
-    compactWidth: 240,
   },
   media: {
     cap: true,
@@ -175,15 +136,7 @@ export const CONFIG: {
   column: {
     enabledByDefault: true,
     actionGap: 32,
-    shortMaxChars: 32,
-    emojiFontSize: 24,
-    shortFontSize: 20,
     carouselIndex: true,
-  },
-  search: {
-    enabled: true,
-    mode: 'custom',
-    placeholder: '搜索',
   },
   settings: {
     right: 20,

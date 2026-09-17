@@ -11,7 +11,7 @@
  *
  * 验证范围（几何层，全部确定性断言）：
  * 1. 功能激活：右栏隐藏时主列铺满 X 内容区（1440 视口 980 = 行 1050 − 右栏右边距 70）、
- *    左缘不动、行不被改写 / 导航条搜索框 / tweet-ui 令牌；
+ *    左缘不动、行不被改写、主题已检测、已移除的四个功能不留痕迹；
  * 2. 真实键盘监听：Alt+B 双向切换右栏显隐（显示时主列 600–800、行被撑开锚定）；
  * 3. 左导航条全程零改写：/home 与 /i/grok 都由 X 自己的 fixed 定位摆放（无脚本内联样式）；
  * 4. 媒体钳制机制：注入超高媒体行 → rAF 帧任务钳到预算高度；回落后宿主粒度解锁；
@@ -145,7 +145,7 @@ async function run() {
 
     // document-start 时序：单个 init 脚本 = 硬化 GM shim + 等待 documentElement 存在后
     // 再执行 dist 产物。注意 Playwright 的 addInitScript 在 document 刚创建时运行，
-    // 此时 documentElement 可能尚未生成（dom-watch observe / tweet-ui 等会因此崩溃；
+    // 此时 documentElement 可能尚未生成（dom-watch observe / theme 等会因此崩溃；
     // 真 TM 的 document-start 同样不保证 documentElement 已存在）—— 必须先等根节点。
     const shimSource = readFileSync(shimFile, 'utf8');
     const bundle = readFileSync(distFile, 'utf8');
@@ -235,13 +235,11 @@ ${bundle}
         railRight: railBox ? Math.round(railBox.right) : -1,
         railX: railBox ? Math.round(railBox.left) : -1,
         railW: railBox ? Math.round(railBox.width) : -1,
-        teSearch: root.dataset.teSearch,
-        hasNavInput: !!document.querySelector('.te-search-host input[type="search"]'),
-        teUi: root.dataset.teUi,
         teTheme: root.dataset.teTheme,
+        teSearch: root.dataset.teSearch,
+        teUi: root.dataset.teUi,
+        hasNavHost: !!document.querySelector('.te-search-host'),
         bodySize: root.style.getPropertyValue('--te-body-size').trim(),
-        lh: root.style.getPropertyValue('--te-body-lh').trim(),
-        measure: root.style.getPropertyValue('--te-measure').trim(),
         teRowData: row?.dataset.teRow,
       };
     });
@@ -261,13 +259,13 @@ ${bundle}
     expect('右栏隐藏时行保持 X 原生对齐', activation.rowJustify, 'space-between');
     expect('右栏隐藏时不写行的 min-width', activation.rowMinWidth, '');
     expect('右栏隐藏时不给行打补偿标记', activation.teRowData, undefined);
-    expect('导航条搜索框默认开启', activation.teSearch, 'on');
-    expect('左栏已挂载自建搜索输入框', activation.hasNavInput, true);
-    expect('推文 UI 默认开启', activation.teUi, 'on');
     expect('主题已检测并写入', ['light', 'dim', 'dark'].includes(activation.teTheme), true);
-    expect('字号令牌 16px', activation.bodySize, '16px');
-    expect('行高令牌 1.5', activation.lh, '1.5');
-    expect('行长令牌 72ch', activation.measure, '72ch');
+    // 已移除的四个功能（导航条搜索框 / 推文新样式 / 推文留白 / 短帖大字号）在真实页面上
+    // 也不许留下痕迹：属性没写、宿主没插、令牌没注入。
+    expect('导航条搜索框已移除（不写 data-te-search）', activation.teSearch, undefined);
+    expect('左栏没有搜索宿主', activation.hasNavHost, false);
+    expect('推文新样式已移除（不写 data-te-ui）', activation.teUi, undefined);
+    expect('正文令牌不再注入（推文新样式随之一并移除）', activation.bodySize, '');
 
     /* ============ 2. 真实键盘监听：Alt+B 双向切换右栏 ============ */
     const pressAltB = () =>
@@ -405,6 +403,14 @@ ${bundle}
       const name = document.createElement('div');
       name.setAttribute('data-testid', 'User-Name');
       name.textContent = '合成作者';
+      // 名字行里 1em 的行内图（真机上是**组织认证徽章**：X 用账号自己的 profile_images
+      // 做 1em 图片，外面套一层 div[role=link]）。2026-09-15 实测：旧版那条
+      // `div[role=link]` 引用卡规则会把它撑成 42×42 的带框方框，这里钉住「不再发生」。
+      const badge = document.createElement('div');
+      badge.setAttribute('role', 'link');
+      badge.id = 'te-e2e-badge';
+      badge.style.cssText = 'display:inline-block;width:16px;height:16px';
+      name.appendChild(badge);
       const text = document.createElement('div');
       text.setAttribute('data-testid', 'tweetText');
       const emoji = document.createElement('img');
@@ -443,17 +449,16 @@ ${bundle}
         () => {
           const article = document.getElementById('te-e2e-tweet');
           const row = document.getElementById('te-e2e-row');
-          return !!article && article.dataset.teCaption === 'emoji' && row?.dataset.teCarousel === '1/2';
+          return !!article && row?.dataset.teCarousel === '1/2';
         },
         null,
         { timeout: 10000 },
       )
       .then(() => true)
       .catch(() => false);
-    expect('合成推文被识别为 emoji 正文并写出轮播序号', columnReady, true);
+    expect('合成推文的轮播被识别并写出序号', columnReady, true);
 
     const columnState = await page.evaluate(() => {
-      const article = document.getElementById('te-e2e-tweet');
       const tile = document.querySelector('#te-e2e-row [data-testid="tweetPhoto"]');
       // 版心断言用真实推文的操作栏：合成推文缺少 X 的包裹结构，宽度是收缩值。
       // 只看主列里的推文并取最宽的一条 —— 通知 / 挂件里也有 article，宽度不是列宽。
@@ -463,23 +468,34 @@ ${bundle}
       const realGroup = realGroups.sort(
         (a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width,
       )[0];
+      const badge = document.getElementById('te-e2e-badge');
+      const badgeStyle = badge ? getComputedStyle(badge) : null;
+      const cell = document.querySelector('[data-testid="cellInnerDiv"]');
       return {
-        caption: article?.dataset.teCaption,
         carousel: document.getElementById('te-e2e-row')?.dataset.teCarousel,
         realGroupMaxWidth: realGroup ? getComputedStyle(realGroup).maxWidth : null,
         realGroupGap: realGroup ? getComputedStyle(realGroup).columnGap : null,
         spineToken: getComputedStyle(document.documentElement).getPropertyValue('--te-spine').trim(),
         tileRadius: tile ? getComputedStyle(tile).borderTopLeftRadius : null,
+        badgeBox: badge ? `${Math.round(badge.getBoundingClientRect().width)}x${Math.round(badge.getBoundingClientRect().height)}` : null,
+        badgePadding: badgeStyle ? badgeStyle.paddingLeft : null,
+        badgeBorder: badgeStyle ? badgeStyle.borderTopWidth : null,
+        cellBorderBottom: cell ? getComputedStyle(cell).borderBottomWidth : null,
       };
     });
-    // 版心 = 正文 72ch 的解析结果（16px Chirp 实测 763.776 → 764）
-    expect('版心令牌取自正文 72ch 的解析值', columnState.spineToken, '764px');
+    // 版心是共享令牌（features/theme.css 的 :root 静态 764px）—— 曾经由写 72ch 的那一层
+    // 实测覆盖，推文新样式移除后正文不再限宽、测量失去样本，版心回到静态值。
+    expect('版心令牌来自令牌层（静态 764px）', columnState.spineToken, '764px');
     expect('版心真的落到操作栏上', columnState.realGroupMaxWidth, '764px');
     expect('操作栏组内间距令牌生效（32px）', columnState.realGroupGap, '32px');
     // 轮播切片直角：X 原生把「一块媒体」切 4 片，逐片 16px 圆角会读成 4 张卡
     expect('轮播切片不给圆角（媒体读作一块）', columnState.tileRadius, '0px');
-    // 轮播切片直角：X 原生把「一块媒体」切 4 片，逐片 16px 圆角会读成 4 张卡
-    expect('轮播切片不给圆角（媒体读作一块）', columnState.tileRadius, '0px');
+    // 2026-09-15 实测回归：引用卡规则同时命中名字行里 1em 的认证徽章，把它从 16×16 撑成
+    // 42×42 的带框方框；单元格分隔线更是与 X 自己那条相邻成 2px。两条都已删规则，这里钉住。
+    expect('名字行里的 1em 徽章不被撑大（无内边距）', columnState.badgePadding, '0px');
+    expect('名字行里的 1em 徽章不被撑大（无边框）', columnState.badgeBorder, '0px');
+    expect('名字行里的 1em 徽章保持行内尺寸', columnState.badgeBox, '16x16');
+    expect('单元格分隔线不自绘（X 的线在 cellInnerDiv 的子元素上）', columnState.cellBorderBottom, '0px');
 
     /* ============ 3c. 单图等比（fit）：方图不被压扁 ============ */
     // 真机缺陷：X 用百分比 padding 比例盒铺满列宽，只压宿主高度会把方图压成 1.66:1。
@@ -616,15 +632,30 @@ ${bundle}
         const rect = el?.getBoundingClientRect();
         return rect ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : 'null';
       };
+      // 图片盒子是否溢出中间包裹层（历史缺陷：卡片被 X 的 max-width 卡在 381、图片盒子 433）。
+      // 用**盒子对盒子**比，而不是 `scrollHeight - clientHeight`：后者会把行内 <img> 的
+      // 基线间隙（约 4px）也算成溢出，而那段间隙由 X 自己那层 `overflow: hidden` 的媒体包裹
+      // 裁掉（2026-09-14 实测：外层包裹 8px 圆角 + overflow:hidden），与「盒子没被钉住」是两回事。
+      const img = photo?.querySelector('img');
+      const overflow = (outer, inner) => {
+        const o = outer?.getBoundingClientRect();
+        const i = inner?.getBoundingClientRect();
+        if (!o || !i) return { x: null, y: null };
+        return {
+          x: Math.round(Math.max(0, i.right - o.right, o.left - i.left)),
+          y: Math.round(Math.max(0, i.bottom - o.bottom, o.top - i.top)),
+        };
+      };
+      const overflowBox = overflow(card, img);
       return {
         flags: `${host?.dataset.teMediaFit}/${card?.dataset.teMediaFit}/${photo?.dataset.teMediaFit}`,
         host: size(host),
         card: size(card),
         photo: size(photo),
+        img: size(img),
         cardMaxWidth: card ? getComputedStyle(card).maxWidth : null,
-        // 图片是否溢出中间包裹层（旧行为：卡片被 max-width 卡在 381、图片 433）
-        cardOverflowX: card ? card.scrollWidth - card.clientWidth : null,
-        cardOverflowY: card ? card.scrollHeight - card.clientHeight : null,
+        cardOverflowX: overflowBox.x,
+        cardOverflowY: overflowBox.y,
       };
     });
     const shrinkWidth = Math.round((budget * 1000) / 1339);
@@ -640,7 +671,7 @@ ${bundle}
     );
     expect('X 用来伪装高度上限的 max-width 被解除', shrinkState.cardMaxWidth, 'none');
     expect(
-      '图片没有溢出中间包裹层（旧行为：卡片被卡在 381、图片 433）',
+      `图片盒子没有溢出中间包裹层（旧行为：卡片被卡在 381、图片盒子 433；实测图片 ${shrinkState.img}）`,
       `${shrinkState.cardOverflowX}/${shrinkState.cardOverflowY}`,
       '0/0',
     );
@@ -856,17 +887,24 @@ ${bundle}
       const overlay = document.querySelector('.te-settings-overlay');
       const dialog = document.querySelector('.te-settings-dialog');
       const box = dialog ? dialog.getBoundingClientRect() : null;
+      const registry = window.__twitterEnhancer ? window.__twitterEnhancer.settings() : [];
       return {
         open: overlay ? overlay.getAttribute('data-te-settings-open') : '(none)',
         display: overlay ? getComputedStyle(overlay).display : '(none)',
         rows: document.querySelectorAll('.te-settings-row').length,
+        registered: registry.length,
         width: box ? Math.round(box.width) : -1,
         top: box ? Math.round(box.top) : -1,
       };
     });
     expect('点击设置按钮打开弹窗', opened.open, 'true');
     expect('弹窗真的显示（display:flex）', opened.display, 'flex');
-    expect('弹窗里渲染出 7 个开关', opened.rows, 7);
+    // 不写死数字：面板是设置注册表的纯函数，两边数量必须一致（新增开关时这条自动跟上）
+    expect(
+      `弹窗里渲染出全部开关（注册表 ${opened.registered} 项）`,
+      opened.rows > 0 && opened.rows === opened.registered,
+      true,
+    );
     expect('弹窗宽度不超过 420px 且已居中', opened.width > 0 && opened.width <= 420, true);
 
     // 弹窗里的开关必须真的改变布局：点「显示右侧栏」→ 右栏从隐藏变可见
@@ -981,26 +1019,59 @@ ${bundle}
         const heroes = [...document.querySelectorAll('article[data-te-hero]')];
         const hero = heroes[0];
         const cell = hero?.closest('[data-testid="cellInnerDiv"]');
+        // X 把分隔线画在 cellInnerDiv 的**首个子元素**上（cellInnerDiv 自己宽度 0），
+        // 所以「焦点帖去掉下边界线」必须量子元素那一条，只量父层会永远通过。
+        const child = cell?.firstElementChild;
         const after = hero ? getComputedStyle(hero, '::after') : null;
+        const heroStyle = hero ? getComputedStyle(hero) : null;
+        const heroRect = hero?.getBoundingClientRect();
+        // 焦点帖内容（正文 / 媒体行）的右缘 vs 焦点帖内容盒的右缘：色带若用负 margin
+        // 实现，负 margin 会掉进 X 的 flex 布局被 flex-grow 项吸收 → 内容比内容盒宽 32px、
+        // 右侧被 article 的 overflow:hidden 裁掉（2026-09-17 实测正文 978 vs 内容盒 946）。
+        // 正文优先；纯媒体帖退到轮播列表（格宽会超出滚动容器，不能用 tweetPhoto 的子孙）；
+        // 都没有时退到操作栏（它被版心收着，这条断言就只是不报错）。
+        const probe =
+          hero?.querySelector('[data-testid="tweetText"]') ??
+          hero?.querySelector('[data-testid="ScrollSnap-List"]') ??
+          hero?.querySelector('[data-testid="tweetPhoto"]') ??
+          hero?.querySelector('[role="group"]');
+        const probeRect = probe?.getBoundingClientRect();
         return {
           count: heroes.length,
           heroCell: cell?.dataset.teHeroCell,
           caption: hero?.dataset.teCaption,
           border: cell ? getComputedStyle(cell).borderBottomColor : null,
-          bandHeight: after?.height,
-          paddingTop: hero ? getComputedStyle(hero).paddingTop : null,
+          childBorder: child ? getComputedStyle(child).borderBottomColor : null,
+          afterBand: after?.height,
+          bandSize: heroStyle?.backgroundSize,
+          bandPosition: heroStyle?.backgroundPosition,
+          paddingTop: heroStyle?.paddingTop,
+          paddingBottom: heroStyle?.paddingBottom,
+          contentOverflows:
+            heroRect && probeRect
+              ? probeRect.right - (heroRect.right - Number.parseFloat(heroStyle.paddingRight)) > 1
+              : null,
         };
       });
       expect('焦点帖只有一条（回复不被误标）', heroState.count, 1);
       expect('焦点帖所在的单元格被标记', heroState.heroCell, '1');
+      // 语义分类（data-te-caption）随「短帖大字号」一起移除，真实页面上也不该再有它
+      expect('焦点帖不再写内容语义分类（短帖大字号已移除）', heroState.caption, undefined);
+      expect('焦点帖下边界线被去掉（改用结构色带分隔）', heroState.border, 'rgba(0, 0, 0, 0)');
+      // 真正可见的那条线在子元素上（2026-09-15 实测：只清父层等于没做）
+      expect('焦点帖子层那条分隔线也被去掉', heroState.childBorder, 'rgba(0, 0, 0, 0)');
+      // 色带画在 article 自己的背景上（宽 = padding box = 整列），不是带负 margin 的伪元素
+      expect('Hero 结尾色带由 article 背景画（100% × 8px）', heroState.bandSize, '100% 8px');
+      // 计算值的序列化会随浏览器版本在 `0% 100%` / `0px 100%` 之间变，两者都是「贴底左」
       expect(
-        '焦点帖正文被分类',
-        ['none', 'emoji', 'short', 'long'].includes(String(heroState.caption)),
+        'Hero 色带贴在底部（bottom left）',
+        /^(0px|0%)\s+100%$/.test(String(heroState.bandPosition)),
         true,
       );
-      expect('焦点帖下边界线被去掉（改用结构色带分隔）', heroState.border, 'rgba(0, 0, 0, 0)');
-      expect('Hero 结尾色带高度 8px', heroState.bandHeight, '8px');
+      expect('Hero 不再有负 margin 的 ::after 色带', heroState.afterBand, 'auto');
       expect('焦点帖上内边距比回复松（20px）', heroState.paddingTop, '20px');
+      expect('焦点帖下内边距 = 间距 20 + 色带 8', heroState.paddingBottom, '28px');
+      expect('焦点帖内容不超出内容盒（色带不再撑宽内容、右侧不被裁）', heroState.contentOverflows, false);
     }
   } finally {
     await context.close();

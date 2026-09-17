@@ -17,10 +17,10 @@ export default defineConfig({
       userscript: {
         name: 'Twitter / X 页面优化',
         namespace: 'twitter-enhancer',
-        version: '0.0.3',
+        version: '0.0.4',
         // 这一行是用户在脚本管理器列表里看到的全部说明，功能集变了要跟着改
         description:
-          '推特（X）网页体验优化：宽时间线 / 媒体高度钳制 / 内容列排版 / 推文新样式 / 右侧栏与导航条搜索框，开关在页内右下角设置面板',
+          '推特（X）网页体验优化：宽时间线 / 媒体高度钳制与单图等比 / 内容列排版（版心、焦点帖、轮播序号）/ 右侧栏显隐，开关在页内右下角设置面板',
         author: 'twitter-enhancer',
         // 与仓库根的 LICENSE 同源：许可证要跟着产物走 —— 用户拿到的是一份 .user.js，
         // 不是这个仓库，再分发时这条注释就是他的许可依据

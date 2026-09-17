@@ -11,16 +11,15 @@
  * 覆盖：
  * 1. 宽度解锁器 unlock-width：按计算值识别并解除被写死的 600px 容器
  *    （媒体轮播 ScrollSnap-List 子树除外：格宽是媒体比例，可能正好落在锁宽区间里）；
- * 2. 推文 UI tweet-ui：主题检测、设计令牌注入、Alt+U 开关与持久化；
- * 3. 侧栏与搜索 sidebar：右栏隐藏、搜索宿主挂载、Alt+B 双向切换；
+ * 2. 主题与共享令牌 features/theme：主题检测（含 body 属性变化后重新检测）、令牌层；
+ * 3. 侧栏 sidebar：右栏隐藏 / 显示、Alt+B 双向切换；
  * 4. 宽时间线 timeline-width：右栏隐藏时主列铺满 X 内容区（与 /i/grok 一致、左缘不动），
  *    右栏显示时 800 封顶；X 没渲染三栏的页面（/i/grok 单栏、/i/chat 双栏）交回原生；
  * 5. 页内设置面板 settings-panel：右下角设置按钮（Grok 按钮上方）、弹窗、开关生效；
  * 6. 页面类型检测 lib/page：分类纯函数、html[data-te-page]、te:page 事件；
  * 7. 等条件 lib/wait-for：stopIf 提前放弃 / 命中返回元素 / 超时放弃；
  * 8. 时间线包装层 lib/timeline：占位层不算时间线、真实层替换、标签页整层替换、旧结构兜底；
- * 9. 按 CONFIG 拼装的样式表 lib/style-sheet：设置按钮几何与 config.ts 同源；
- * 10. 命名观察器作用域 lib/observer-scope：节点被替换时同名重登记、旧观察器断开。
+ * 9. 按 CONFIG 拼装的样式表 lib/style-sheet：设置按钮几何与 config.ts 同源。
  *
  * 注意场景之间有顺序耦合：末尾几段读的是前面建出来的 window（样式表那段读第一个窗口），
  * 因此不能重排、也还不能只跑其中一段（拆分的前提见 docs/development.md）。
@@ -60,61 +59,26 @@ expect(
 );
 
 const root1 = w1.document.documentElement;
-expect('推文 UI 默认开启', root1.dataset.teUi, 'on');
-expect('主题已检测', typeof root1.dataset.teTheme, 'string');
-expect('正文字号令牌 16px', root1.style.getPropertyValue('--te-body-size'), '16px');
-expect('行高令牌 1.5', root1.style.getPropertyValue('--te-body-lh'), '1.5');
-expect('行长令牌 72ch', root1.style.getPropertyValue('--te-measure'), '72ch');
+expect('主题已检测（写 html[data-te-theme]）', ['light', 'dim', 'dark'].includes(String(root1.dataset.teTheme)), true);
 expect('宽时间线默认开启', root1.dataset.teTimeline, 'wide');
 // 铺满内容区时主列已占满 X 给内容区的宽度，行不需要任何补偿样式：
 // 保持 X 原生的 space-between（单子节点下等价于左对齐），与 /i/grok 的行一致
 expect('铺满内容区时不撑开三栏行', w1.document.getElementById('row').style.minWidth, '');
 expect('铺满内容区时不给行打补偿标记', w1.document.getElementById('row').dataset.teRow, undefined);
-expect('导航条搜索框默认开启', root1.dataset.teSearch, 'on');
-
 expect('右侧栏默认隐藏', root1.dataset.teSidebar, 'off');
-const nav1 = w1.document.querySelector('nav[aria-label="Primary"]');
-const host1 = nav1.querySelector('.te-search-host');
-expect('左栏已插入搜索宿主', Boolean(host1), true);
-expect('宿主挂在导航条内', host1?.parentElement === nav1, true);
-expect('custom 模式生成输入框', Boolean(host1?.querySelector('input[type="search"]')), true);
-expect(
-  '输入框带无障碍名称',
-  host1?.querySelector('input[type="search"]')?.getAttribute('aria-label'),
-  '搜索',
-);
 // 右栏隐藏时不再做居中补偿（居中会把主列左缘推开、左导航条跟着偏移）；
 // 主列铺满内容区，行交回 X 原生对齐
 expect('右栏隐藏时不改写行对齐', q('row').style.justifyContent, '');
-expect('logo 与导航项同级时退回绝对定位', host1?.dataset.teSearchLayout, 'absolute');
-expect('导航条被设为定位上下文', nav1.style.position, 'relative');
-expect('搜索框左边缘在 logo 右侧（62+12）', host1?.style.left, '74px');
-expect('搜索框与 logo 垂直居中对齐', host1?.style.top, '11px');
-expect(
-  '原生搜索框仍留在右栏（custom 模式不搬运 React 节点）',
-  Boolean(w1.document.querySelector('[data-testid="sidebarColumn"] [role="search"]')),
-  true,
-);
 
-// ================= Alt+U 持久化 =================
-const w2 = createWindow();
-// 布尔开关统一以 'true' / 'false' 落盘：false = 关闭推文新样式
-w2.localStorage.setItem('twitter-enhancer:tweet-ui', 'false');
-w2.eval(script);
-await sleep(120);
-expect('按存储恢复推文 UI 为关闭态', w2.document.documentElement.dataset.teUi, 'off');
-
-// 旧版本写过 'on' / 'off' 格式，读取时需兼容
-const w2b = createWindow();
-w2b.localStorage.setItem('twitter-enhancer:tweet-ui', 'off');
-w2b.eval(script);
-await sleep(120);
-expect('兼容旧格式 off', w2b.document.documentElement.dataset.teUi, 'off');
-const w2c = createWindow();
-w2c.localStorage.setItem('twitter-enhancer:tweet-ui', 'on');
-w2c.eval(script);
-await sleep(120);
-expect('兼容旧格式 on', w2c.document.documentElement.dataset.teUi, 'on');
+// 已移除的四个功能（导航条搜索框 / 推文新样式 / 推文留白 / 短帖大字号）不再有任何副作用。
+// 这几条是回归锁：谁把它们加回来，这里先红（属性名与被删掉的开关 id 一一对应）。
+expect('推文新样式已移除（不写 data-te-ui）', root1.dataset.teUi, undefined);
+expect('推文留白已移除（不写 data-te-density）', root1.dataset.teDensity, undefined);
+expect('导航条搜索框已移除（不写 data-te-search）', root1.dataset.teSearch, undefined);
+expect('短帖大字号已移除（不写 data-te-caption-scale）', root1.dataset.teCaptionScale, undefined);
+expect('左栏不再插入搜索宿主', Boolean(w1.document.querySelector('.te-search-host')), false);
+expect('正文令牌不再注入（随推文新样式一并移除）', root1.style.getPropertyValue('--te-body-size'), '');
+expect('行长令牌不再注入', root1.style.getPropertyValue('--te-measure'), '');
 
 // ================= Alt+B 双向切换侧栏 =================
 const w3 = createWindow();
@@ -137,26 +101,6 @@ press(w3, 'KeyB');
 await sleep(60);
 expect('再次 Alt+B 恢复右栏', root3.dataset.teSidebar, 'on');
 expect('恢复后重新锚定为左对齐', row3.style.justifyContent, 'flex-start');
-
-// ================= / 快捷键拦截 =================
-const w4 = createWindow();
-w4.eval(script);
-await sleep(120);
-const input4 = w4.document.querySelector('.te-search input');
-w4.document.body.focus();
-w4.dispatchEvent(
-  new w4.KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true }),
-);
-await sleep(30);
-expect('按 / 焦点落到自建搜索框', w4.document.activeElement === input4, true);
-
-// 在输入框内输入 / 不应被拦截（此时焦点已在输入框，目标为 INPUT）
-input4.focus();
-w4.dispatchEvent(
-  new w4.KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true }),
-);
-await sleep(30);
-expect('输入框内按 / 不被重复处理', w4.document.activeElement === input4, true);
 
 // ================= 页内设置面板（取代旧版油猴菜单开关） =================
 // 开关从油猴菜单搬进页面：右下角设置按钮（在 X 的 Grok 悬浮按钮正上方）→ 设置弹窗。
@@ -217,11 +161,10 @@ expect('弹窗标题为「设置」', w5.document.getElementById('te-settings-ti
 const EXPECTED_SETTINGS = [
   'timeline-wide',
   'sidebar',
-  'nav-search',
-  'tweet-ui',
   'media-cap',
   'media-fit',
   'content-column',
+  'carousel-index',
 ];
 const EXPECTED_GROUPS = ['布局', '内容'];
 
@@ -252,6 +195,7 @@ expect('宽时间线开关初始为开', settingState(w5, 'timeline-wide'), 'tru
 expect('显示右侧栏开关初始为关（右栏默认隐藏）', settingState(w5, 'sidebar'), 'false');
 expect('内容列排版开关初始为开', settingState(w5, 'content-column'), 'true');
 expect('单图等比开关初始为开', settingState(w5, 'media-fit'), 'true');
+expect('轮播序号开关初始为开', settingState(w5, 'carousel-index'), 'true');
 expect('开关的可访问角色为 switch', rows5[0].querySelector('.te-settings-switch')?.getAttribute('role'), 'switch');
 
 // 每一行都必须是一个「接上了功能」的开关：点一下状态翻转，再点一下复位。
@@ -292,23 +236,15 @@ await sleep(30);
 expect('再次点击恢复宽时间线', w5.document.documentElement.dataset.teTimeline, 'wide');
 expect('宽时间线开关状态刷新为开', settingState(w5, 'timeline-wide'), 'true');
 
-// 导航条搜索框开关
-toggleSetting(w5, 'nav-search');
+// 页面快捷键改状态时，打开着的面板要跟着刷新（Alt+B 切右栏）
+press(w5, 'KeyB');
 await sleep(30);
-expect('关闭导航条搜索框', w5.document.documentElement.dataset.teSearch, 'off');
-expect('关闭后宿主仍在 DOM（可随时再开）', Boolean(w5.document.querySelector('.te-search-host')), true);
-toggleSetting(w5, 'nav-search');
+expect('Alt+B 隐藏右栏', w5.document.documentElement.dataset.teSidebar, 'off');
+expect('面板中「显示右侧栏」开关同步为关', settingState(w5, 'sidebar'), 'false');
+press(w5, 'KeyB');
 await sleep(30);
-expect('再次点击恢复搜索框', w5.document.documentElement.dataset.teSearch, 'on');
-
-// 页面快捷键改状态时，打开着的面板要跟着刷新（Alt+U 关推文新样式）
-press(w5, 'KeyU');
-await sleep(30);
-expect('Alt+U 关闭推文新样式', w5.document.documentElement.dataset.teUi, 'off');
-expect('面板中推文新样式开关同步为关', settingState(w5, 'tweet-ui'), 'false');
-press(w5, 'KeyU');
-await sleep(30);
-expect('Alt+U 再次开启', w5.document.documentElement.dataset.teUi, 'on');
+expect('Alt+B 再次恢复右栏', w5.document.documentElement.dataset.teSidebar, 'on');
+expect('面板中开关同步为开', settingState(w5, 'sidebar'), 'true');
 
 // 关闭路径：Esc、遮罩、右上角关闭按钮
 const escape5 = new w5.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -352,76 +288,6 @@ expect(
   `${fab5b?.style.width}x${fab5b?.style.height}`,
   '55pxx55px',
 );
-
-// ================= 真实 DOM 结构（logo 是 nav 的兄弟） =================
-// 结构取自 2026-09 实测：内栏 flex column → [logo 行, nav 容器, 发帖按钮]，
-// logo 行默认只撑到 logo 宽度，必须拉伸后才能放下搜索框。
-const HTML_REAL = `<!doctype html><html><head></head><body>
-  <div id="inner" data-w="259">
-    <div id="logoRow"><h1 id="logoH1"><a href="/home" aria-label="X">logo</a></h1></div>
-    <div id="navWrap"><nav aria-label="Primary">
-      <a href="/home">主页</a>
-      <a href="/explore">探索</a>
-    </nav></div>
-  </div>
-  <div id="row" style="display:flex">
-    <div data-testid="primaryColumn" style="width:800px"></div>
-    <div data-testid="sidebarColumn"><form role="search"><input data-testid="SearchBox_Search_Input" /></form></div>
-  </div>
-</body></html>`;
-
-const w6 = createWindow(HTML_REAL);
-w6.eval(script);
-await sleep(120);
-const inner6 = w6.document.getElementById('inner');
-const logoRow = w6.document.getElementById('logoRow');
-const logo6 = w6.document.querySelector('a[aria-label="X"]');
-const host6 = w6.document.querySelector('.te-search-host');
-expect('真实结构下采用左右结构', host6?.dataset.teSearchLayout, 'row');
-expect('宿主挂在 logo 行（不是 h1、也不是 nav）', host6?.parentElement === logoRow, true);
-expect('宿主与 h1 同为 logo 行子节点', logo6?.parentElement?.parentElement === logoRow, true);
-expect('行容器改为 flex', logoRow.style.display, 'flex');
-expect('行方向改为 row（X 默认 column）', logoRow.style.flexDirection, 'row');
-expect('行内容左右分布', logoRow.style.justifyContent, 'space-between');
-expect('行容器不换行', logoRow.style.flexWrap, 'nowrap');
-expect('行容器拉伸到内栏宽度', logoRow.style.alignSelf, 'stretch');
-expect('logo 容器被压住 flex-grow（否则抢走搜索框空间）', w6.document.getElementById('logoH1').style.flexGrow, '0');
-expect('logo 容器被压住 flex-shrink', w6.document.getElementById('logoH1').style.flexShrink, '0');
-expect('未退回绝对定位（无 left/top 残留）', host6?.style.left, '');
-expect('内栏未判定为图标条', inner6.dataset.teNavCompact, 'false');
-
-// ================= 内栏收窄成图标条 =================
-const HTML_COMPACT = HTML_REAL.replace('id="inner" data-w="259"', 'id="inner" data-w="120"');
-const w7 = createWindow(HTML_COMPACT);
-w7.eval(script);
-await sleep(120);
-const inner7 = w7.document.getElementById('inner');
-expect('内栏 120px 判定为图标条', inner7.dataset.teNavCompact, 'true');
-expect('图标条下宿主仍挂载（由 CSS 隐藏）', Boolean(inner7.querySelector('.te-search-host')), true);
-
-// ================= h1 之上无独立行容器时退回绝对定位 =================
-const HTML_NO_ROW = `<!doctype html><html><head></head><body>
-  <div id="inner" data-w="259">
-    <a href="/home" aria-label="X">logo</a>
-    <div id="navWrap"><nav aria-label="Primary">
-      <a href="/home">主页</a>
-      <a href="/explore">探索</a>
-    </nav></div>
-    <div id="post">发帖</div>
-  </div>
-  <div id="row" style="display:flex">
-    <div data-testid="primaryColumn" style="width:800px"></div>
-    <div data-testid="sidebarColumn"></div>
-  </div>
-</body></html>`;
-
-const w8 = createWindow(HTML_NO_ROW);
-w8.eval(script);
-await sleep(120);
-const nav8 = w8.document.querySelector('nav[aria-label="Primary"]');
-const host8 = w8.document.querySelector('.te-search-host');
-expect('logo 与导航项同级时退回绝对定位', host8?.dataset.teSearchLayout, 'absolute');
-expect('绝对定位时宿主挂回导航条', host8?.parentElement === nav8, true);
 
 // ================= 右栏隐藏时脚本不碰左导航条 =================
 const HTML_RAIL = `<!doctype html><html><head></head><body>
@@ -1130,30 +996,40 @@ await sleep(220);
 const colRoot = wCol.document.documentElement;
 const tweetHero = wCol.document.getElementById('tweetHero');
 expect('内容列排版默认开启', colRoot.dataset.teColumn, 'on');
-expect('emoji 独占正文 → caption=emoji', tweetHero.dataset.teCaption, 'emoji');
-expect('短句 → caption=short', wCol.document.getElementById('tweetShort').dataset.teCaption, 'short');
-expect('长文 → caption=long', wCol.document.getElementById('tweetLong').dataset.teCaption, 'long');
-expect('无正文 → caption=none', wCol.document.getElementById('tweetMedia').dataset.teCaption, 'none');
 expect('焦点帖被标记（URL 里的那条）', tweetHero.dataset.teHero, '1');
 expect('焦点帖的单元格被标记（CSS 据此去掉下边界线）', wCol.document.getElementById('heroCell').dataset.teHeroCell, '1');
 expect('回复不会被标成焦点帖', wCol.document.getElementById('tweetShort').dataset.teHero, undefined);
 expect('多图轮播写出序号（1/3）', wCol.document.getElementById('carouselRow').dataset.teCarousel, '1/3');
 expect('单图帖不写轮播序号', wCol.document.getElementById('mediaCell').dataset.teCarousel, undefined);
+// 语义分类（data-te-caption）随「短帖大字号」一起移除：不再写这个属性
+expect('不再写内容语义分类（短帖大字号已移除）', tweetHero.dataset.teCaption, undefined);
 
 // 关掉内容列排版：属性全清，交回 X 原生
 toggleSetting(wCol, 'content-column');
 await sleep(60);
 expect('关闭内容列排版后属性转为 off', colRoot.dataset.teColumn, 'off');
-expect('关闭后清除语义分类', tweetHero.dataset.teCaption, undefined);
 expect('关闭后清除焦点帖标记', tweetHero.dataset.teHero, undefined);
 expect('关闭后清除单元格标记', wCol.document.getElementById('heroCell').dataset.teHeroCell, undefined);
 expect('关闭后清除轮播序号', wCol.document.getElementById('carouselRow').dataset.teCarousel, undefined);
 expect('内容列排版开关状态刷新为关', settingState(wCol, 'content-column'), 'false');
 toggleSetting(wCol, 'content-column');
 await sleep(60);
-expect('重新开启后语义分类恢复', tweetHero.dataset.teCaption, 'emoji');
 expect('重新开启后焦点帖标记恢复', tweetHero.dataset.teHero, '1');
 expect('内容列排版开关状态刷新为开', settingState(wCol, 'content-column'), 'true');
+
+// 子开关：轮播角标是「本项目新增的观感」，X 原生没有对应物，所以单独一个开关；
+// 它与主开关独立，主开关关掉时一并失效（CSS 同时挂在两层属性下）。
+expect('轮播序号门控属性默认开启', colRoot.dataset.teCarouselIndex, 'on');
+toggleSetting(wCol, 'carousel-index');
+await sleep(60);
+expect('关闭轮播序号后角标属性被清掉', wCol.document.getElementById('carouselRow').dataset.teCarousel, undefined);
+expect('关闭轮播序号不影响焦点帖标记', tweetHero.dataset.teHero, '1');
+expect('轮播序号门控属性转为 off', colRoot.dataset.teCarouselIndex, 'off');
+expect('轮播序号开关状态刷新为关', settingState(wCol, 'carousel-index'), 'false');
+toggleSetting(wCol, 'carousel-index');
+await sleep(60);
+expect('重新开启后角标恢复', wCol.document.getElementById('carouselRow').dataset.teCarousel, '1/3');
+expect('轮播序号门控属性恢复为 on', colRoot.dataset.teCarouselIndex, 'on');
 
 // ================= 轮播格不被当成行宿主，也不进 fit =================
 // 真机缺陷（2026-09-14，Sena 4 图竖图帖，1440 视口）：轮播某格的「比例盒」在未钳制状态下
@@ -1217,6 +1093,72 @@ expect(
   0,
 );
 expect('单格轮播仍按行宿主钳制', wCarOne.document.getElementById('carList').dataset.teMediaCapped, '1');
+
+// ================= 长文（Article）正文不被当成媒体行 =================
+// 真机缺陷（2026-09-17，用户反馈「文章页面，文章无法完整显示」，1440 视口，
+// 标本 https://x.com/yupi996/status/2100405798681862604 —— X 的「文章」长文阅读页）：
+// 长文阅读视图（article[data-testid="twitterArticleReadView"]）里**没有** tweetText
+// 锚点（正文是它自己的富文本层），于是 media-cap 的两条保护在这里都失效：
+// ① 「宿主 = 媒体向上第一个够宽且**不含正文**的祖先」认不出正文，正文图片的行宿主被
+//    正常选中（实测写前 oh=653，躲过了「超过 2.5 屏不是媒体区」那条保护）；
+// ② 钳制时那条 **祖先链**（宿主 → … → article/cellInnerDiv 为止）会一路写高度，
+//    而在这条链上就有承载**整篇文章**的容器（实测 158 个子块、写前 oh=23177）。
+// 实测后果：整篇正文的容器被写成 height 580px（预算），内容从盒子里溢出，虚拟列表按
+// 被压短的 cell（1401px）摆放后续位置 → 回复盖在文章上、文章读不全（docH 4444，
+// 正常应为 24590+；同一页 X 原生 20175）。
+// 修正：长文正文视图里的媒体一律不进钳制 / 等比 —— 正文是文档而不是推文的媒体行，
+// 与「轮播内部不作为宿主」同属**结构排除**（判据是稳定 testid，不是尺寸或高度）。
+const HTML_ARTICLE = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div data-testid="cellInnerDiv">
+          <article data-testid="tweet">
+            <div id="artShell" data-w="978" data-h="24000">
+              <article data-testid="twitterArticleReadView" data-w="978" data-h="24000">
+                <div id="artRich" data-testid="twitterArticleRichTextView" data-w="978" data-h="24000">
+                  <div id="artBody" data-w="978" data-h="23930">整篇正文（真机 158 个块）
+                    <div id="artFig" data-w="978" data-h="653">
+                      <div data-testid="tweetPhoto" id="artPhoto" data-w="978" data-h="653"><img id="artImg" /></div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </article>
+        </div>
+        <div data-testid="cellInnerDiv">
+          <article data-testid="tweet">
+            <div data-testid="tweetText">回复正文</div>
+            <div id="replyRow" data-w="978" data-h="900">
+              <div data-testid="tweetPhoto" data-w="978" data-h="900"></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wArt = createWindow(HTML_ARTICLE);
+const artImg = wArt.document.getElementById('artImg');
+Object.defineProperty(artImg, 'naturalWidth', { configurable: true, value: 900 });
+Object.defineProperty(artImg, 'naturalHeight', { configurable: true, value: 1200 });
+wArt.eval(script);
+await sleep(220);
+const artBody = wArt.document.getElementById('artBody');
+const artFig = wArt.document.getElementById('artFig');
+expect('长文正文容器（整篇正文）不被写入预算高度', artBody.style.height, '');
+expect('长文正文容器不被当成媒体行宿主', artBody.dataset.teMediaCapped, undefined);
+expect('长文正文容器不被写入宽度（不进 fit）', artBody.style.width, '');
+expect('长文正文视图内的其它层也不被写高度', wArt.document.getElementById('artRich').style.height, '');
+expect('长文正文视图本身不被写高度', wArt.document.querySelector('[data-testid="twitterArticleReadView"]').style.height, '');
+expect('长文正文里的图片行不被钉尺寸', `${artFig.style.width}|${artFig.style.height}`, '|');
+expect('长文正文里没有任何 fit 标记', wArt.document.querySelectorAll('[data-te-media-fit]').length, 0);
+// 反向对照：同一页里普通推文的媒体行照旧被钳制 —— 证明上面不是「整页都没生效」
+expect('普通推文的媒体行仍被钳制（反向对照）', wArt.document.getElementById('replyRow').dataset.teMediaCapped, '1');
 
 // ================= 列容器先出现、推文后渲染（用户实测回归） =================
 // 真机时序：X 先挂「列容器」（带 max-width:600px 的 hashed class），再往里渲染推文。
@@ -1530,9 +1472,9 @@ expect(
   '1',
 );
 expect(
-  '排版契约的反向对照：正文语义分类已写入（内容列排版确实跑到了）',
-  shapeTweet.dataset.teCaption,
-  'short',
+  '排版契约的反向对照：主题已检测（皮肤层确实跑到了）',
+  ['light', 'dim', 'dark'].includes(String(wShape.document.documentElement.dataset.teTheme)),
+  true,
 );
 
 // ================= 验证出口 =================
@@ -1549,28 +1491,6 @@ const inject = async (window, wait = 140) => {
 };
 
 /** 装一个假的 ResizeObserver：记录实例、观察目标与是否被断开（jsdom 没有它） */
-const installFakeResizeObserver = (window) => {
-  const instances = [];
-  class FakeResizeObserver {
-    constructor() {
-      this.observed = [];
-      this.disconnected = false;
-      instances.push(this);
-    }
-    observe(target) {
-      this.observed.push(target);
-    }
-    unobserve(target) {
-      this.observed = this.observed.filter((el) => el !== target);
-    }
-    disconnect() {
-      this.disconnected = true;
-    }
-  }
-  window.ResizeObserver = FakeResizeObserver;
-  return instances;
-};
-
 // ================= 页面类型检测（lib/page.ts） =================
 // 参考 control-panel-for-twitter 的 PagePaths + isOnXxxPage：把「现在在哪一页」收敛成
 // 一条纯函数 + 一个事件，功能不再各自写正则。分类结果同时写在 html[data-te-page]。
@@ -1741,38 +1661,77 @@ const fabRule = staticSheet?.sheet
 expect('静态 CSS 里不再重复写按钮几何（width 交给样式表）', fabRule?.style.width ?? '', '');
 expect('静态 CSS 保留不随配置变化的观感（position: fixed）', fabRule?.style.position ?? '', 'fixed');
 
-// ================= 命名观察器作用域（lib/observer-scope.ts） =================
-// 参考项目的 observers Map + observeElement：观察目标被 React 换掉时，同名重登记会先断开
-// 旧的。旧实现用 `watching` 标志只认第一次挂载 —— SPA 导航换掉内栏后，ResizeObserver
-// 永远盯着脱离文档的旧节点，新内栏没人观察（图标条断点判定静默失效）。
-const wScope = createWindow(HTML_REAL);
-const roInstances = installFakeResizeObserver(wScope);
-await inject(wScope);
-const oldInner = wScope.document.getElementById('inner');
-const observes = (ro, el) => ro.observed.includes(el);
-const innerObserversBefore = roInstances.filter((ro) => observes(ro, oldInner));
-expect('搜索宿主的内栏观察器已登记', innerObserversBefore.length, 1);
-expect('登记时处于活动状态', innerObserversBefore[0].disconnected, false);
-
-// 模拟 X 的 SPA 导航：整块内栏换成新节点（新节点里没有脚本的宿主，走慢路径重挂）
-const freshInner = wScope.document.createElement('div');
-freshInner.id = 'inner';
-freshInner.setAttribute('data-w', '259');
-freshInner.innerHTML =
-  '<div id="logoRow"><h1 id="logoH1"><a href="/home" aria-label="X">logo</a></h1></div>' +
-  '<div id="navWrap"><nav aria-label="Primary"><a href="/home">主页</a></nav></div>';
-oldInner.replaceWith(freshInner);
-await sleep(160);
-
-expect('旧内栏的观察器被断开（不再盯着脱离文档的节点）', innerObserversBefore[0].disconnected, true);
-const innerObserversAfter = roInstances.filter((ro) => observes(ro, freshInner));
-expect('新内栏被重新观察', innerObserversAfter.length, 1);
-expect('新观察器处于活动状态', innerObserversAfter[0].disconnected, false);
+// ================= 样式层：还在写什么、不再写什么（2026-09-16 复核） =================
+// 「推文新样式 / 推文留白 / 短帖大字号 / 导航条搜索框」四个功能已按用户要求移除，
+// tweet-ui.css 与 sidebar.css 里的对应规则块随之下线（令牌层收缩成 features/theme.css）。
+// 这里同时钉两件相反的事：
+//   1. 剩下的规则块必须真的带声明（防空转 —— 否则「不再有某规则」会因为什么都没解析出来而永远通过）；
+//   2. 已删掉的规则不许再写回来（自绘分隔线 / 引用卡框 / share-views 死选择器 / 密度层 / 语义分类）。
+// 断言读的是构建后的 CSS 文本（构建会去掉注释并压缩，属性值不带引号），
+// 所以按 `选择器{声明}` 拆块后做正则匹配，而不是走 CSSOM（jsdom 的解析器会丢掉部分规则）。
+// 注意：每个 CSS 文件是**一个** <style>（`_css()` 逐文件注入），必须把全部样式表拼起来看 ——
+// 只读 `staticSheet`（含 .te-settings-fab 的那个）会漏掉 theme.css / content-column.css，
+// 那几条断言就成了永远通过的空断言。
+const cssText = [...w1.document.querySelectorAll('head style')]
+  .map((el) => el.textContent ?? '')
+  .join('\n');
+const cssBlocks = cssText
+  .split('}')
+  .map((chunk) => {
+    const at = chunk.lastIndexOf('{');
+    return at === -1 ? null : { selector: chunk.slice(0, at), body: chunk.slice(at + 1) };
+  })
+  .filter(Boolean);
+// 防空转：样式表文本必须真的被拆成块，且内容列的声明确实存在
+expect('样式表文本已按 选择器{声明} 拆块（防断言空转）', cssBlocks.length > 30, true);
 expect(
-  '同名只留一个活动观察器（同名重登记）',
-  roInstances.filter((ro) => !ro.disconnected && (observes(ro, oldInner) || observes(ro, freshInner))).length,
-  1,
+  '内容列排版真的带声明（不只是写了个门控属性）',
+  cssBlocks.some((block) => /data-te-column/.test(block.selector) && /max-width/.test(block.body)),
+  true,
 );
+expect(
+  '共享令牌层还在（间距梯与版心写在 :root 里）',
+  cssBlocks.some((block) => block.selector.includes(':root') && /--te-spine:\s*764px/.test(block.body)),
+  true,
+);
+const dividerRules = cssBlocks.filter(
+  (block) => /cellInnerDiv/.test(block.selector) && /border-bottom(?!-color)/.test(block.body),
+);
+expect(
+  '没有整格自绘的分隔线规则（X 的线在 cellInnerDiv 的子元素上，两条相邻 = 2px 双线）',
+  dividerRules.length,
+  0,
+);
+const linkCardRules = cssBlocks.filter(
+  (block) => /role=link/.test(block.selector) && !block.selector.includes('focus-visible'),
+);
+expect('不再有引用卡片规则（它同时会命中名字行的 1em 认证徽章）', linkCardRules.length, 0);
+expect(
+  '不再有 share / views 死选择器（现版本这两个 testid 不存在）',
+  /\[data-testid=(?:share|views)\]/.test(cssText),
+  false,
+);
+expect('推文留白已移除（样式里不再有 data-te-density）', cssText.includes('data-te-density'), false);
+expect('推文新样式已移除（样式里不再有 data-te-ui）', cssText.includes('data-te-ui'), false);
+expect('短帖大字号已移除（样式里不再有 data-te-caption）', cssText.includes('data-te-caption'), false);
+expect('导航条搜索框已移除（样式里不再有 .te-search）', cssText.includes('.te-search'), false);
+expect('轮播角标仍挂在 data-te-carousel-index 下', cssText.includes('data-te-carousel-index'), true);
+
+// ================= 主题跟随（features/theme.ts 的窄观察器） =================
+// 主题检测是本项目唯一挂在具体节点上的观察器（裸 MutationObserver，盯 html / body）：
+// 它盯 html / body 的 style / class 变化，X 切主题时改写这些属性。
+// jsdom 的 MutationObserver 是真的，所以这条链路（观察器 → 帧队列 → 检测 → 写属性）
+// 可以端到端测出来 —— 不测观察器的接线，等于「X 切主题后脚本静默不跟」这种缺陷无人拦。
+const wTheme = createWindow();
+wTheme.eval(script);
+await sleep(140);
+const themeRoot = wTheme.document.documentElement;
+wTheme.document.body.style.backgroundColor = 'rgb(0, 0, 0)';
+await sleep(140);
+expect('body 变纯黑后重新检测为 dark', themeRoot.dataset.teTheme, 'dark');
+wTheme.document.body.style.backgroundColor = 'rgb(255, 255, 255)';
+await sleep(140);
+expect('body 变纯白后重新检测为 light', themeRoot.dataset.teTheme, 'light');
 
 // ================= 输出 =================
 report();

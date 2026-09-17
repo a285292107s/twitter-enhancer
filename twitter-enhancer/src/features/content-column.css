@@ -1,35 +1,34 @@
 /**
- * 内容列排版（版心 / Hero / 内容语义 / 轮播序号）。
+ * 内容列排版（版心 / Hero / 轮播序号）。
  *
- * 与 tweet-ui.css 的分工：那边管令牌、主题、操作栏反馈与媒体盒子；
- * 这边管「信息怎么排」—— 阅读流的左右边界、焦点帖的主角地位、
- * 正文按内容长度分层、多图轮播的序号。
+ * 与主题令牌层的分工：那边只管 `:root` 令牌与主题属性（features/theme.css）；
+ * 这边管「信息怎么排」—— 阅读流的左右边界、焦点帖的主角地位、多图轮播的序号。
  *
  * 约束：
- * 1. 规则挂在 html[data-te-column='on'] 下（属性由 features/content-column.ts 写），
- *    与 data-te-ui 相互独立，可分别开关；
+ * 1. 规则挂在 html[data-te-column='on'] 下（属性由 features/content-column.ts 写）；
+ *    轮播角标是本项目**新增**的观感，另有子属性门控 data-te-carousel-index；
  * 2. 只锚定 data-testid 与自身写入的属性，不锚 X 的哈希 class；
- * 3. 间距只从 --te-gap-1..5 五档里取，不写魔数；
- * 4. 只写 color / background / max-width / font-size / line-height / position，
- *    不改任何元素的 layout 高度或宽度（媒体等比模式在 media-cap 里，见该文件）。
+ * 3. 间距只从共享令牌里的 --te-gap-* 取，不写魔数（令牌层只声明还有消费方的档位）；
+ * 4. 只写 color / background / padding / max-width / font-size / line-height / position，
+ *    不改任何元素的宽度（媒体等比模式在 media-cap 里，见该文件）；唯一的内边距改动是
+ *    焦点帖的 Hero 那一处，且**总高度与它替换掉的 ::after 色带一致**（间距 20 + 色带 8）。
  */
 
-/* 版心默认值（`--te-spine`）由令牌层提供：见 tweet-ui.css 的 :root 与 tweet-ui.ts 的 publishSpine。
-   ch 相对元素自身字号解析，所以定义 measure 的那一层会测量并发布一个 px 版心，
-   这里只消费 —— 本模块不碰 computed style，也不去问另一个功能的开关状态。 */
+/* 版心（`--te-spine`）是共享令牌，定义在 features/theme.css 的 `:root`（764px）。
+   本模块只消费 —— 不测量、不反推，也不需要知道别的功能的开关状态。 */
 
 /* --- 版心：阅读流收进 --te-spine；昵称行与媒体保持整列宽 ---
    列宽 600 → 980 后，若让正文、元信息、操作栏一起摊到 946px，页面只会「被拉长」。
    这里把阅读流收进 764px 版心，多出来的宽度变成留白，形成「窄文字 / 宽图版」的对照。
+   正文那条限宽规则随「推文新样式」一起移除，版心现在只作用于操作栏。
 
    不需要 !important：X 给操作栏写的 max-width:600px 是普通声明，本选择器的特异性
    （html[data-te-column] + article[data-testid=tweet] + [role=group]）已高于它。
    曾经要压的是宽度解锁器给同一元素打的 `max-width:100% !important` —— 解锁器现在按
    「承载内容单元的容器」判定，操作栏不在其列（见 lib/unlock-width.ts 的 CONTENT_UNIT）。 */
 html[data-te-column='on'] article[data-testid='tweet'] [role='group'] {
-  max-width: var(--te-spine, var(--te-measure));
-  /* --te-spine 是令牌层发布的 px 版心（ch 相对元素自身字号，操作栏继承 15px 时
-    72ch 只有 633px，会与正文的 764px 对不齐）。
+  max-width: var(--te-spine);
+  /* 版心是 px 令牌（`ch` 相对元素自身字号解析，操作栏继承 X 的 15px 时 72ch 只有 633px）。
      X 的操作按钮是 flex:1 1 0% 的等距分布（实测 detail 页 5 个、时间线 6 个），
      这是它的设计语言，保留；版心只负责把这条轴从 946px 收到 764px。
      gap 参与分布计算，所以它不是装饰值 —— 去掉后图标会贴得更开。 */
@@ -38,48 +37,44 @@ html[data-te-column='on'] article[data-testid='tweet'] [role='group'] {
 
 /* --- Hero：详情页焦点帖 ---
    焦点帖与回复用同一种 hairline、同一套字号时，详情页读起来仍是「时间线里的一格」。
-   这里删掉焦点帖的下边界线（tweet-ui 那条带 !important，所以这里也得带），
-   改用它自己的结尾色带 + 更大的上内边距把主角立起来。 */
-html[data-te-column='on'] [data-testid='cellInnerDiv'][data-te-hero-cell] {
+   这里去掉焦点帖的下边界线，改用它自己的结尾色带 + 更大的上内边距把主角立起来。
+
+   **线在子元素上**（2026-09-15 实测）：X 把分隔线画在 `cellInnerDiv` 的**首个子元素**上
+   （`1px solid rgb(239,243,244)`），而 `cellInnerDiv` 自己的 border 宽度是 0 ——
+   只清父层等于什么都没做（本规则从 2026-09-14 起就一直没真正生效）。
+   所以清色要同时覆盖父层与 `> *`：前者是历史写法（X 以后若把线挪回来仍然成立），
+   后者才是当前真正可见的那一条。 */
+html[data-te-column='on'] [data-testid='cellInnerDiv'][data-te-hero-cell],
+html[data-te-column='on'] [data-testid='cellInnerDiv'][data-te-hero-cell] > * {
   border-bottom-color: transparent !important;
 }
 
 html[data-te-column='on'] article[data-testid='tweet'][data-te-hero] {
-  padding: 20px 16px 0;
-}
-
-html[data-te-column='on'] article[data-testid='tweet'][data-te-hero]::after {
-  content: '';
-  display: block;
-  height: 8px;
-  /* 左右负边距吃掉 article 的 16px 内边距，色带铺满整列 */
-  margin: var(--te-gap-3) -16px 0;
-  background-color: var(--te-surface-sunken);
-}
-
-/* --- 内容语义：正文按内容分层 ---
-   emoji 独占正文的帖子（如标本：6 个 emoji、textContent 长度 0）按 16px/1.5 的
-   段落排，视觉上像「正文丢了」；短句帖也不该跟长文同一个字号。
-   分类由 content-column.ts 写在 article[data-te-caption] 上（none/emoji/short/long）。 */
-html[data-te-column='on'] article[data-testid='tweet'][data-te-caption='emoji'] [data-testid='tweetText'] {
-  font-size: var(--te-caption-emoji-size, 24px);
-  /* emoji 是行内 img，行高收紧才不会变成一行「空段落」 */
-  line-height: 1.1;
-}
-
-html[data-te-column='on'] article[data-testid='tweet'][data-te-caption='short'] [data-testid='tweetText'] {
-  font-size: var(--te-caption-short-size, 20px);
-  line-height: 1.35;
+  /* 上下各多 8px 的层级差（回复保持 12px 16px 8px）；底部 28px = 间距 20 + 色带 8 */
+  padding: 20px 16px calc(var(--te-gap-3) + var(--te-hero-band));
+  /* 结尾色带铺满整列：**用 article 自己的背景画**，不用带负 margin 的 ::after。
+     为什么（2026-09-17 实测，1440 视口）：负 margin（左右各 -16px）会掉进 X 的 flex
+     布局 —— 焦点帖的内容外层是 flex-grow 项，会把负 margin 制造出来的 32px「自由空间」
+     吸收掉：普通推文的正文实测 380..1358（978px，而内容盒只有 946），长文（文章）页更狠：
+     整篇正文的容器被撑到 978 宽，右侧 16px 落在 article 的 overflow:hidden 之外被裁掉
+     （用户反馈「文章无法完整显示」的一半原因就是这个）。背景方案不参与 flex 布局，
+     铺满的仍是同一个矩形（宽 = padding box = 整列 978）。 */
+  background-image: linear-gradient(var(--te-surface-sunken), var(--te-surface-sunken));
+  background-repeat: no-repeat;
+  background-position: bottom left;
+  background-size: 100% var(--te-hero-band);
 }
 
 /* --- 多图轮播：媒体右上角的序号 ---
    980 列下 4 格竖图只有 3 格可见（第 4 格露 69px），序号把「被切断」变成
-   「还有 1 张」。文字写在宿主属性的 attr() 上，JS 只改属性值、不插节点。 */
-html[data-te-column='on'] [data-te-carousel] {
+   「还有 1 张」。文字写在宿主属性的 attr() 上，JS 只改属性值、不插节点。
+   角标是本项目**新增**的元素（X 原生没有），所以自带开关 `carousel-index`：
+   JS 侧不再写属性，CSS 这层再门控一次（开关状态是属性，两处都读同一份事实）。 */
+html[data-te-column='on'][data-te-carousel-index='on'] [data-te-carousel] {
   position: relative;
 }
 
-html[data-te-column='on'] [data-te-carousel]::after {
+html[data-te-column='on'][data-te-carousel-index='on'] [data-te-carousel]::after {
   content: attr(data-te-carousel);
   position: absolute;
   top: var(--te-gap-1);

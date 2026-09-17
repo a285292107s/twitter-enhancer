@@ -15,7 +15,8 @@
  * 1. 宿主 = 从媒体元素向上找到的第一个宽度 ≥ lockWidth 的祖先：宽度下限把
  *    定位抬到「整行」（单图媒体区宽 = 内容列宽；轮播列表宽 = 行宽），而不是
  *    轮播里的某一格；候选层含正文（data-testid=tweetText）则不是媒体区
- *    （是整条推文列），跳过继续上溯；
+ *    （是整条推文列），跳过继续上溯；长文（X 的「文章」）正文视图里的媒体整体
+ *    排除 —— 那里的正文不是 tweetText，钳制的祖先链会穿过整篇文章（见 findHost）；
  * 2. 预算 = clamp(视口高 − chromeAllowance, minHeight, maxHeight)：保证焦点帖的元信息\n *    与操作栏落在当前屏内（推导见 CONFIG.media 注释与 heightBudget）；
  * 3. 钳制后做一次布局校验：若内容没跟着行高重排（罕见：固定像素高的媒体），
  *    立刻还原、保持 X 原生观感，绝不裁剪/重叠；
@@ -396,6 +397,16 @@ function reconcileSeed(seed: HTMLElement): void {
  * 轮播列表自身仍可作宿主（整行一起压，X 会让所有格按行高等比重排）。
  */
 function findHost(el: Element): HTMLElement | null {
+  // 长文（X 的「文章」）正文里的媒体不是「媒体行的媒体」：正文区没有 tweetText 锚点，
+  // 所以「不含正文」这条判据在这里失效 —— 正文图片的行宿主会被正常选中，而钳制时那条
+  // **祖先链**（宿主 → … → article/cellInnerDiv 为止）上就有承载整篇文章的容器。
+  // 实测 2026-09-17（标本 x.com/yupi996/status/2100405798681862604，1440 视口）：
+  // 图片行宿主写前 oh=653（躲过了「超过 2.5 屏不是媒体区」那条保护），祖先链上的正文容器
+  // （158 个子块、写前 oh=23177）被写成 height 580px → 正文从盒子里溢出、虚拟列表按
+  // 被压短的 cell 摆放后续位置 → 回复盖在文章上、文章显示不全（docH 4444 而非 24590+）。
+  // 正文是**文档**而不是推文的媒体行，与「轮播内部不作为宿主」同属结构排除：
+  // 判据是稳定 testid，不是尺寸 / 高度 / 内容多少。
+  if (el.closest(SEL.articleReadView)) return null;
   let p = el.parentElement;
   while (p && p !== document.body) {
     const carousel = p.closest(CAROUSEL_SCOPE);

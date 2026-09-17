@@ -3,8 +3,8 @@
  *
  * 约束：
  * 1. 只用自己的 `te-settings-*` 类名，不碰 X 的哈希 class；
- * 2. 配色跟随 X 主题：主题判定由 tweet-ui 写在 html[data-te-theme]（light / dim / dark），
- *    令牌统一加 `--te-set-` 前缀，避免与 tweet-ui.css 的 `--te-*` 令牌撞名；
+ * 2. 配色跟随 X 主题：主题判定由 features/theme.ts 写在 html[data-te-theme]（light / dim / dark），
+ *    令牌统一加 `--te-set-` 前缀，避免与 theme.css 的 `--te-*` 令牌撞名；
  * 3. X 的全局样式会命中 button / kbd 等元素，自绘控件把 appearance / border / background /
  *    font 全写出来，不吃继承来的意外值；
  * 4. 过渡只动 color / background-color / opacity / transform，不动 width / height（不引起布局抖动）。

@@ -17,8 +17,10 @@
  *    （见 docs/architecture.md 不变量「单一布局门控点」）。
  * 2. **首屏就必须生效的令牌**不放这里。document-start 注入时 `<head>` 可能还不存在，
  *    运行时样式表最快也只能挂到 `documentElement`（本模块会这么做，并在 head 就绪后
- *    搬进去），但首帧渲染仍可能早于 JS 执行 —— 正文令牌这类东西继续走
- *    `style.setProperty('--te-*')` 写在 `:root` 上（见 features/tweet-ui.ts）。
+ *    搬进去），但首帧渲染仍可能早于 JS 执行 —— 版心 / 间距梯这类令牌继续走
+ *    CSS 文件里的 `:root` 声明（见 features/theme.css）。
+ *    例外是**被测得 / 来自 CONFIG 的几何**（`--te-timeline-width`、`--te-action-gap`）：
+ *    它们的值是运行时才知道的，只能走 `style.setProperty('--te-*')`。
  *
  * ## 用法
  *

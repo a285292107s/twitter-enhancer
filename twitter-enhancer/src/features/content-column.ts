@@ -1,23 +1,23 @@
 /**
- * 内容列排版：版心、Hero、内容语义、轮播序号。
+ * 内容列排版：版心、Hero、轮播序号。
  *
- * 为什么单独成模块（而不是继续堆在 tweet-ui 里）：tweet-ui 是「皮肤层」（令牌 / 主题 /
- * 操作栏反馈），本模块是「排版层」—— 它要**读内容**再写属性，属于有状态的 DOM 逻辑。
- * 两者开关独立，方便逐条对比（见 docs/content-column-design.md）。
+ * 为什么单独成模块（而不是继续堆在皮肤层里）：皮肤层的规则是纯 CSS 的属性门控，
+ * 本模块是「排版层」—— 它要**读内容**再写属性，属于有状态的 DOM 逻辑。
  *
- * 三件事，全部只写属性、不插节点、不搬节点：
- * 1. 版心 / Hero：焦点帖（详情页 URL 里那条）打 data-te-hero，它的 cell 打
- *    data-te-hero-cell；CSS 据此把主角立起来（结构色带 + 更大上内边距）。
+ * 两件事，全部只写属性、不插节点、不搬节点：
+ * 1. 版心 / Hero：正文与操作栏收进 764px 版心（`--te-spine`，见 features/theme.css）；
+ *    焦点帖（详情页 URL 里那条）打 data-te-hero、它的 cell 打 data-te-hero-cell，
+ *    CSS 据此把主角立起来（结构色带 + 更大上内边距）。
  *    判据用「article 里有 a[href] 的路径 === location.pathname」——2026-09-14 真机实测：
  *    焦点帖命中、同页 45 条回复全部不命中。
- * 2. 内容语义：给 article 写 data-te-caption = none | emoji | short | long。
- *    emoji 是行内 <img>，textContent 长度为 0，因此「emoji 独占正文」必须靠
- *    img 计数单独识别（标本帖子正文就是 6 个 emoji）。
- * 3. 轮播序号：多图轮播在媒体宿主上写 data-te-carousel="3/4"，
+ * 2. 轮播序号：多图轮播在媒体宿主上写 data-te-carousel="3/4"，
  *    CSS 用 ::after + attr() 画角标；滚动时只改属性值，不插节点。
  *
+ * 曾经还有一件「内容语义分类」（emoji / 短句 / 长文分档，供短帖大字号用），
+ * 随该开关一并移除。
+ *
  * 监听策略（与 media-cap 同一套）：dom-watch 的合并批次回调只**收集**命中的
- * article（滚动路径上不做子树扫描与布局读），真正的分类 / 定位推迟到下一个 rAF
+ * article（滚动路径上不做子树扫描与布局读），真正的定位推迟到下一个 rAF
  * 帧统一执行；结构性变化（te:layout / 路由 / overflow / load）走整树补扫。
  */
 import { CONFIG } from '../config';
@@ -38,13 +38,14 @@ const CELL_SELECTOR = SEL.cell;
 const CAROUSEL_ATTR = 'teCarousel';
 const HERO_ATTR = 'teHero';
 const HERO_CELL_ATTR = 'teHeroCell';
-const CAPTION_ATTR = 'teCaption';
 
 /** 轮播宿主向上查找的最大层数（防在异常 DOM 上爬太远） */
 const HOST_MAX_DEPTH = 6;
 
 /** 内容列排版的当前值 —— 与 createToggle 同步的镜像（理由见 timeline-width.ts 同类注释） */
 let enabled = CONFIG.column.enabledByDefault;
+/** 轮播序号的当前值 —— 同上。它自己一个开关：角标是本项目**新增**的视觉元素，不是 X 原生 */
+let carouselIndexOn = CONFIG.column.carouselIndex;
 
 /* ------------------------------------------------------------------ *
  * 帧任务合并：批次回调只收集，工作在下一个渲染帧里做。
@@ -77,38 +78,8 @@ function scheduleFullScan(): void {
 }
 
 /* ------------------------------------------------------------------ *
- * 分类与标记
+ * 标记
  * ------------------------------------------------------------------ */
-
-/**
- * 取本条推文自己的正文：跳过引用卡片里的正文（它在 div[role="link"] 内），
- * 否则「无正文 + 引用一条带文字的帖子」会被按引用内容分类。
- */
-function ownText(article: HTMLElement): HTMLElement | null {
-  for (const node of article.querySelectorAll<HTMLElement>(TEXT_SELECTOR)) {
-    if (!node.closest('div[role="link"]')) return node;
-  }
-  return null;
-}
-
-type CaptionKind = 'none' | 'emoji' | 'short' | 'long';
-
-/**
- * 内容语义分类。emoji 在 X 里是行内 <img>（不产生文本），所以：
- * 可见字符数 = textContent 去掉空白后的长度（emoji 记 0），emoji 数 = img 数。
- */
-function classify(text: HTMLElement | null): CaptionKind {
-  if (!text) return 'none';
-  const chars = (text.textContent ?? '').replace(/\s+/g, '').length;
-  const emoji = text.querySelectorAll('img').length;
-  if (chars === 0) return emoji > 0 ? 'emoji' : 'none';
-  return chars <= CONFIG.column.shortMaxChars ? 'short' : 'long';
-}
-
-function classifyCaption(article: HTMLElement): void {
-  const kind = classify(ownText(article));
-  if (article.dataset[CAPTION_ATTR] !== kind) article.dataset[CAPTION_ATTR] = kind;
-}
 
 /**
  * 焦点帖判定：article 里存在指向当前路径的链接（时间戳 / 图片链接都指向它）。
@@ -192,12 +163,12 @@ function updateCarouselIndex(list: HTMLElement, host: HTMLElement): void {
  */
 function scheduleCarouselIndex(list: HTMLElement, host: HTMLElement): void {
   frameQueue.schedule(list, () => {
-    if (enabled && host.isConnected) updateCarouselIndex(list, host);
+    if (enabled && carouselIndexOn && host.isConnected) updateCarouselIndex(list, host);
   });
 }
 
 function markCarousel(article: HTMLElement): void {
-  if (!CONFIG.column.carouselIndex) return;
+  if (!carouselIndexOn) return;
   const list = article.querySelector<HTMLElement>(SNAP_SELECTOR);
   if (!list || list.children.length < 2) return;
   const host = findCarouselHost(list);
@@ -211,7 +182,6 @@ function markCarousel(article: HTMLElement): void {
 }
 
 function processArticle(article: HTMLElement): void {
-  classifyCaption(article);
   markHero(article, currentStatusPath());
   markCarousel(article);
 }
@@ -221,7 +191,6 @@ function scanAll(): void {
   clearHeroMarks();
   const path = currentStatusPath();
   for (const article of document.querySelectorAll<HTMLElement>(TWEET_SELECTOR)) {
-    classifyCaption(article);
     markHero(article, path);
     markCarousel(article);
   }
@@ -244,11 +213,17 @@ function collectArticles(added: Element[], into: Set<HTMLElement>): void {
 
 /** 清掉本模块写过的全部属性（关闭开关 / 交回 X 原生） */
 function clearMarks(): void {
-  const selector = '[data-te-caption],[data-te-hero],[data-te-hero-cell],[data-te-carousel]';
+  const selector = '[data-te-hero],[data-te-hero-cell],[data-te-carousel]';
   for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-    delete el.dataset[CAPTION_ATTR];
     delete el.dataset[HERO_ATTR];
     delete el.dataset[HERO_CELL_ATTR];
+    delete el.dataset[CAROUSEL_ATTR];
+  }
+}
+
+/** 只清轮播序号（单个子开关关闭时用，不动焦点帖标记） */
+function clearCarouselIndex(): void {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-te-carousel]')) {
     delete el.dataset[CAROUSEL_ATTR];
   }
 }
@@ -258,17 +233,13 @@ function clearMarks(): void {
  * ------------------------------------------------------------------ */
 
 /**
- * 版心（`--te-spine`）**不由本模块发布**：它由写 `--te-measure` 的那一层测量并写进
- * `:root`（见 features/tweet-ui.ts 的 publishSpine）—— 那是唯一知道 ch 怎么解析的地方。
- * 本模块只是消费方（CSS 里 `max-width: var(--te-spine, var(--te-measure))`），
- * 既不碰 computed style，也不需要读另一个功能的开关状态。
+ * 版心（`--te-spine`）是共享令牌，定义在 features/theme.css 的 `:root`（764px）。
+ * 本模块只是消费方（CSS 里 `max-width: var(--te-spine)`），不测量、不反推。
+ * 曾经由写 `--te-measure` 的那一层按正文的 72ch 解析结果覆盖它；推文新样式移除后
+ * 正文不再限宽、测量失去样本，版心回到静态值。
  */
 function applyTokens(): void {
-  const root = document.documentElement;
-  const { column } = CONFIG;
-  root.style.setProperty('--te-action-gap', `${column.actionGap}px`);
-  root.style.setProperty('--te-caption-emoji-size', `${column.emojiFontSize}px`);
-  root.style.setProperty('--te-caption-short-size', `${column.shortFontSize}px`);
+  document.documentElement.style.setProperty('--te-action-gap', `${CONFIG.column.actionGap}px`);
 }
 
 function applyEnabled(value: boolean): void {
@@ -276,6 +247,20 @@ function applyEnabled(value: boolean): void {
   document.documentElement.dataset.teColumn = value ? 'on' : 'off';
   if (value) scheduleFullScan();
   else clearMarks();
+}
+
+/**
+ * 轮播序号开关生效。
+ *
+ * 关掉时要把已写下的 `data-te-carousel` 清掉（CSS 里也有它自己的属性门控，
+ * 但留着属性会让「关掉」这件事只成立在 CSS 一侧，回来时又得靠一次全量补扫才对齐）；
+ * 打开时整树补扫一次，把已经渲染好的轮播重新打上角标。
+ */
+function applyCarouselIndex(value: boolean): void {
+  carouselIndexOn = value;
+  document.documentElement.dataset.teCarouselIndex = value ? 'on' : 'off';
+  if (value) scheduleFullScan();
+  else clearCarouselIndex();
 }
 
 export function enableContentColumn(): void {
@@ -286,9 +271,19 @@ export function enableContentColumn(): void {
     id: 'content-column',
     group: '内容',
     label: '内容列排版',
-    description: '正文按内容分层（emoji / 短句 / 长文）、操作栏收进版心、焦点帖加结构分隔',
+    description: '操作栏收进 764px 版心、焦点帖加结构分隔',
     default: CONFIG.column.enabledByDefault,
     apply: applyEnabled,
+  });
+  // 子开关：面板行序紧跟主开关。它与主开关相互独立，但主开关关掉时一并失效
+  // （CSS 规则同时挂在 data-te-column 与子属性下）。
+  createToggle({
+    id: 'carousel-index',
+    group: '内容',
+    label: '轮播序号',
+    description: '多图轮播右上角显示 3/4 角标（本脚本新增的元素，X 原生没有）',
+    default: CONFIG.column.carouselIndex,
+    apply: applyCarouselIndex,
   });
 
   if (document.readyState === 'loading') {
