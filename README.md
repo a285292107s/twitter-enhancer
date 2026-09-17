@@ -80,7 +80,7 @@ https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-en
 ```bash
 cd twitter-enhancer
 npm install
-npm run verify      # 交付前必跑：tsc + 构建 + jsdom 回归（298 项）
+npm run verify      # 交付前必跑：tsc + 构建 + jsdom 回归（305 项）
 npm run dev         # 只重建 dist（vite build --watch）
 npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.com（91 项）
 ```
@@ -93,7 +93,7 @@ npm run e2e:real    # 真机几何 E2E：headless 独立 profile 打开真实 x.
 | 层 | 覆盖 | 命令 |
 | --- | --- | --- |
 | 类型 + 构建 | `tsc` 严格模式（`noUnusedLocals` 等）+ 打包 | `npm run verify` |
-| jsdom 回归 | 页面类型分类、等待器、时间线包装层、宽度解锁、媒体钳制、内容列排版、设置面板契约（298 项） | 同上 |
+| jsdom 回归 | 页面类型分类、等待器、时间线包装层、宽度解锁、媒体钳制、内容列排版、设置面板契约（305 项） | 同上 |
 | 真机几何 E2E | 真实布局引擎 + 当前 x.com DOM：列宽几何、SPA 切换零布局抖动、媒体钳制、版心（91 项） | `npm run e2e:real` |
 
 **注意夹具的边界**：jsdom 回归跑的是我们自己的夹具，X 改版它一条都不会红 —— 能发现

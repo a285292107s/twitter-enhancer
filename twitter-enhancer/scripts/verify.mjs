@@ -24,6 +24,7 @@
  * 注意场景之间有顺序耦合：末尾几段读的是前面建出来的 window（样式表那段读第一个窗口），
  * 因此不能重排、也还不能只跑其中一段（拆分的前提见 docs/development.md）。
  */
+import { readFileSync } from 'node:fs';
 import {
   budgetOf,
   createWindow,
@@ -1732,6 +1733,26 @@ expect('body 变纯黑后重新检测为 dark', themeRoot.dataset.teTheme, 'dark
 wTheme.document.body.style.backgroundColor = 'rgb(255, 255, 255)';
 await sleep(140);
 expect('body 变纯白后重新检测为 light', themeRoot.dataset.teTheme, 'light');
+
+// ================= 产物头部：@icon（管理器列表里的图标） =================
+// 图标是**构建期内联**的：真源 assets/icon.svg → base64 data URI → 产物头部。
+// 这几条锁住两件事：产物自包含（不是指向 raw 直链的 URL，装脚本时不多出一次网络请求），
+// 以及产物里的图标与源文件同源（改了 SVG 忘了重建、或构建里换了份图，这里先红）。
+const ICON_PREFIX = 'data:image/svg+xml;base64,';
+const iconLine = script.split('\n').find((line) => /^\/\/\s*@icon\s/.test(line));
+expect('产物头部声明了 @icon', Boolean(iconLine), true);
+expect('@icon 是内联 data URI（不指向 URL → 安装 / 检查更新时不取图）', iconLine?.includes(ICON_PREFIX), true);
+
+const iconSvg = Buffer.from(iconLine.slice(iconLine.indexOf(ICON_PREFIX) + ICON_PREFIX.length).trim(), 'base64').toString('utf8');
+expect('@icon 解码后确实是一份 SVG', iconSvg.startsWith('<svg') && iconSvg.endsWith('</svg>'), true);
+expect('@icon 解码后带 24 网格的 viewBox', iconSvg.includes('viewBox="0 0 24 24"'), true);
+expect('头部只带图形，不带源文件里的说明注释', iconSvg.includes('<!--'), false);
+// 只剥注释、不动几何：源文件里的 <rect> 应逐个出现在产物里（属性顺序 / 写法不一致也会红）
+const rectsOf = (svg) =>
+  (svg.match(/<rect[^>]*\/>/g) ?? []).map((tag) => tag.replace(/\s+/g, ' ').trim()).join(' | ');
+const iconSource = readFileSync(new URL('../assets/icon.svg', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+expect('图标带图形元素（防「两边都空」的断言空转）', /<(?:rect|path|circle|ellipse|polygon|line)\b/.test(iconSvg), true);
+expect('产物里的图标与 assets/icon.svg 同源', rectsOf(iconSvg), rectsOf(iconSource));
 
 // ================= 输出 =================
 report();

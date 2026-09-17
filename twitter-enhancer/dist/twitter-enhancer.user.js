@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Twitter / X 页面优化
 // @namespace    twitter-enhancer
-// @version      0.0.5
+// @version      0.0.6
 // @author       twitter-enhancer
 // @description  推特（X）网页体验优化：宽时间线 / 媒体高度钳制与单图等比 / 内容列排版（版心、焦点帖、轮播序号）/ 右侧栏显隐，开关在页内右下角设置面板
 // @license      MIT
+// @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByb2xlPSJpbWciCiAgICAgYXJpYS1sYWJlbD0iVHdpdHRlciAvIFgg6aG16Z2i5LyY5YyWIj48cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHJ4PSI1LjQiIGZpbGw9IiMwRjE0MTkiIC8+PGcgZmlsbD0iI0ZGRkZGRiI+PHJlY3QgeD0iNCIgeT0iNS42IiB3aWR0aD0iMi40IiBoZWlnaHQ9IjEyLjgiIHJ4PSIxLjIiIC8+PHJlY3QgeD0iOCIgeT0iNS42IiB3aWR0aD0iMTEuOCIgaGVpZ2h0PSIxMi44IiByeD0iMi42IiAvPjwvZz48L3N2Zz4=
 // @homepageURL  https://github.com/a285292107s/twitter-enhancer
 // @supportURL   https://github.com/a285292107s/twitter-enhancer/issues
 // @downloadURL  https://raw.githubusercontent.com/a285292107s/twitter-enhancer/master/twitter-enhancer/dist/twitter-enhancer.user.js

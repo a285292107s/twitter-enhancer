@@ -379,7 +379,7 @@ padding 后套上了我们的预算高度，于是图片被拉到容器尺寸。
 
 ```powershell
 cd twitter-enhancer
-npm run verify      # tsc + 构建 + jsdom 回归（298 项）
+npm run verify      # tsc + 构建 + jsdom 回归（305 项）
 npm run e2e:real    # 真机几何（91 项，含详情页焦点帖与已移除功能的回归锁）
 ```
 
