@@ -1161,6 +1161,75 @@ expect('长文正文里没有任何 fit 标记', wArt.document.querySelectorAll(
 // 反向对照：同一页里普通推文的媒体行照旧被钳制 —— 证明上面不是「整页都没生效」
 expect('普通推文的媒体行仍被钳制（反向对照）', wArt.document.getElementById('replyRow').dataset.teMediaCapped, '1');
 
+// ================= 媒体行与引用卡并排时，不把卡片一起钉尺寸 =================
+// 真机缺陷（2026-09-18 用户反馈「推文较长时，也会显示异常」，标本
+// https://x.com/dotey/status/2100767963737727267，1440 视口）：X 把「推文自己的媒体行」与
+// 「引用卡 / 文章卡」并排放在**同一个容器**里（实测 946×1054 = 媒体行 946×512 + 卡片 946×538）。
+// 旧的祖先链爬升只认 tweetText，认不出卡片 → 这条链一路爬到那个容器，把容器连同卡片一起
+// 钉成 438×580：整张卡片被压瘪，推文高度 1742 → 1268（差 474px 就是卡片被吞掉的高度），
+// 而且同一页冷加载时好时坏（取决于 fit 判定与卡片渲染的先后）。
+// 修正：祖先里只要**并排着别的内容**（图片 / 视频 / 可见文字）就不再往上写尺寸 ——
+// 与「轮播内部不作为宿主」同一类结构判据；只有纯装饰兄弟（轮播两侧的翻页按钮，纯 SVG 无文字）
+// 才放行。
+const HTML_LONG_MEDIA = `<!doctype html><html><head></head><body>
+  <nav aria-label="Primary"><a href="/home">主页</a></nav>
+  <div id="row" style="display:flex">
+    <div data-testid="primaryColumn" style="width:800px">
+      <div style="width:100%">
+        <div data-testid="cellInnerDiv">
+          <article data-testid="tweet">
+            <div data-testid="tweetText" data-w="946" data-h="432">长推文正文</div>
+            <div id="mediaBlock" data-w="946" data-h="1054">
+              <div id="photoRow" data-w="946" data-h="512">
+                <div data-testid="tweetPhoto" id="longPhoto" data-w="946" data-h="512"><img id="longImg" /></div>
+              </div>
+              <div id="cardBlock" data-w="946" data-h="538">引用 宝玉 ·文章 腾讯学堂：AI 原生思维<img id="cardImg" /></div>
+            </div>
+          </article>
+        </div>
+        <div data-testid="cellInnerDiv">
+          <article data-testid="tweet">
+            <div data-testid="tweetText" data-w="946" data-h="200">另一条推文</div>
+            <div id="mediaBlock2" data-w="946" data-h="1054">
+              <div id="photoRow2" data-w="400" data-h="512">
+                <div data-testid="tweetPhoto" id="narrowPhoto" data-w="400" data-h="512"><img id="narrowImg" /></div>
+              </div>
+              <div id="cardBlock2" data-w="946" data-h="538">引用卡片<img id="cardImg2" /></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+    <div data-testid="sidebarColumn"></div>
+  </div>
+</body></html>`;
+
+const wLong = createWindow(HTML_LONG_MEDIA);
+for (const [id, w, h] of [['longImg', 513, 679], ['cardImg', 900, 360], ['narrowImg', 513, 679], ['cardImg2', 900, 360]]) {
+  const img = wLong.document.getElementById(id);
+  Object.defineProperty(img, 'naturalWidth', { configurable: true, value: w });
+  Object.defineProperty(img, 'naturalHeight', { configurable: true, value: h });
+}
+wLong.eval(script);
+await sleep(240);
+const mediaBlock = wLong.document.getElementById('mediaBlock');
+const cardBlock = wLong.document.getElementById('cardBlock');
+const photoRow = wLong.document.getElementById('photoRow');
+// 反向对照：媒体行自身照旧等比（证明这一页真的跑到了媒体钳制）
+expect('媒体行自身仍按等比钉住（反向对照）', photoRow.style.height, `${budgetOf(wLong)}px`);
+// 与被钉媒体行并排的引用卡容器：一个字节都不该被写
+expect('并排着卡片的媒体块不被写高度', mediaBlock.style.height, '');
+expect('并排着卡片的媒体块不被写宽度（不被压瘪）', mediaBlock.style.width, '');
+expect('并排着卡片的媒体块不打钳制标记', mediaBlock.dataset.teMediaCapped, undefined);
+expect('并排着卡片的媒体块不打等比标记', mediaBlock.dataset.teMediaFit, undefined);
+expect('卡片自己不被钉尺寸', `${cardBlock.style.width}|${cardBlock.style.height}`, '|');
+// 媒体行比 lockWidth 窄时，findHost 会越过它 —— 也不能落到「并排着卡片的媒体块」上
+expect(
+  '窄媒体行不把并排卡片的容器当宿主（无任何标记）',
+  wLong.document.querySelectorAll('#mediaBlock2 [data-te-media-capped],#mediaBlock2 [data-te-media-fit]').length,
+  0,
+);
+
 // ================= 列容器先出现、推文后渲染（用户实测回归） =================
 // 真机时序：X 先挂「列容器」（带 max-width:600px 的 hashed class），再往里渲染推文。
 // 曾经用「这个元素内部有没有内容单元」判断角色 —— 容器被扫描时内部还是空的，判 false；

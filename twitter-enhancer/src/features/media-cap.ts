@@ -279,6 +279,41 @@ function mediaWrappers(host: HTMLElement, media: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * 「纯包裹层」判据：容器里除了承载这条媒体链的那一支，不能**并排着别的内容**。
+ *
+ * 为什么需要（2026-09-18 用户实测反馈「推文较长时，也会显示异常」，标本
+ * x.com/dotey/status/2100767963737727267）：X 把「推文自己的媒体行」与「引用卡 / 文章卡」
+ * 并排放在**同一个容器**里 —— 实测该容器 946×1054 = 媒体行 946×512 + 卡片 946×538。
+ * 旧的祖先链爬升只认 `tweetText`，认不出卡片，于是这条链一路爬到那个容器，把容器连同
+ * 里面的卡片一起钉成 438×580：整张卡片被压瘪（推文高度 1742 → 1268，差的 474px 就是
+ * 被吞掉的卡片），而且冷加载时好时坏 —— 取决于等比判定与卡片渲染谁先到。
+ *
+ * 「别的内容」＝ 带可见文字，或带**不属于推文媒体容器**（`tweetPhoto` / `videoPlayer`）
+ * 的图片 / 视频。两条例外都是有真机依据的，不是放宽：
+ * - 同一条媒体行的**另一片媒体**（轮播逐格渲染时先后到达）不算别的内容 —— 否则
+ *   「宿主里从 1 张图变成 2 张图」这条增量路径会整条失效（实测夹具：轮播成型后行仍被钳制）；
+ * - 纯装饰兄弟（轮播两侧的翻页按钮 `ScrollSnap-prev/nextButtonWrapper`，纯 SVG、无文字、
+ *   无 img）不算。
+ * 判据是**结构**，不是尺寸（与「轮播内部不作为宿主」「长文正文整体排除」同一类）。
+ * 边界：偏保守（X 若把某段屏读文字放进媒体块，那一层就不再受压），保守的代价只是少压一层、
+ * 留一点空白；反过来误判的代价是整块内容被压瘪。
+ */
+function hasContentSibling(container: HTMLElement, carrier: Element): boolean {
+  for (const child of container.children) {
+    // 承载媒体链的那一支（自己或祖先）不算兄弟
+    if (child.contains(carrier)) continue;
+    // 另一片媒体（轮播格）：同一行的媒体，不是「别的内容」
+    if (child.matches(MEDIA_SELECTOR)) continue;
+    if ((child.textContent ?? '').trim().length > 0) return true;
+    // 卡片封面 / 头像这类图片不在媒体容器里 → 是别的内容
+    for (const image of child.querySelectorAll('img,video')) {
+      if (!image.closest(MEDIA_SELECTOR)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 应用等比方案：媒体盒子、宿主到媒体之间的每一层包裹、以及整条媒体链，全部按算出来的尺寸写死。
  *
  * **整条媒体链一起收**（`run` = 宿主 + 宿主之上的纯媒体祖先）：只缩媒体与宿主时，
@@ -415,7 +450,10 @@ function findHost(el: Element): HTMLElement | null {
       continue;
     }
     if (p.offsetWidth >= CONFIG.media.lockWidth) {
-      if (!p.querySelector(SEL.tweetText)) return p;
+      // 含正文（tweetText）→ 是整条推文列；并排着别的内容（引用卡 / 文章卡 / 另一条媒体）
+      // → 是「媒体 + 卡片」的混合块（见 hasContentSibling）。两者都不是这条媒体的行宿主，
+      // 继续上溯（更高的祖先只会更宽、更不可能是媒体行），最终返回 null 交回 X 原生。
+      if (!p.querySelector(SEL.tweetText) && !hasContentSibling(p, el)) return p;
     }
     p = p.parentElement;
   }
@@ -449,7 +487,9 @@ function contentBottomAfterClamp(host: HTMLElement): number {
  * 爬升边界（防误伤）：
  * - 到 article / cellInnerDiv 为止；
  * - 含正文（tweetText）或操作栏（reply/like 等 data-testid）即停，
- *   绝不压缩文字与计数栏。
+ *   绝不压缩文字与计数栏；
+ * - 与「引用卡 / 文章卡 / 另一条媒体」并排的容器即停（`hasContentSibling`）：
+ *   那一层不是纯媒体包裹，压它等于把卡片一起压瘪（2026-09-18 实测）。
  * 百分比 padding 盒在压高时把 padding-bottom 临时归零（记录原值、解锁还原）。
  * 钳住后同步校验行内媒体底边：若内容没随行高重排（会超界被裁），整链还原。
  */
@@ -482,6 +522,9 @@ function applyCap(host: HTMLElement): void {
     if (p.querySelector(SEL.actionBar)) {
       break;
     }
+    // 并排着别的内容（引用卡 / 文章卡 / 另一条媒体）→ 这一层不是「纯媒体包裹」：
+    // 继续往上写尺寸会把卡片一起压瘪（2026-09-18 实测，见 hasContentSibling）
+    if (hasContentSibling(p, host)) break;
     run.push(p);
     p = p.parentElement;
   }

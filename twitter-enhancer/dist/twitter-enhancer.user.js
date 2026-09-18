@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter / X 页面优化
 // @namespace    twitter-enhancer
-// @version      0.0.6
+// @version      0.0.7
 // @author       twitter-enhancer
 // @description  推特（X）网页体验优化：宽时间线 / 媒体高度钳制与单图等比 / 内容列排版（版心、焦点帖、轮播序号）/ 右侧栏显隐，开关在页内右下角设置面板
 // @license      MIT
@@ -1176,6 +1176,15 @@
 		}
 		return el === host ? wrappers : [];
 	}
+	function hasContentSibling(container, carrier) {
+		for (const child of container.children) {
+			if (child.contains(carrier)) continue;
+			if (child.matches(MEDIA_SELECTOR)) continue;
+			if ((child.textContent ?? "").trim().length > 0) return true;
+			for (const image of child.querySelectorAll("img,video")) if (!image.closest(MEDIA_SELECTOR)) return true;
+		}
+		return false;
+	}
 	function applyFit(run, wrappers, plan) {
 		const { media, width, height } = plan;
 		const pinBox = (el) => {
@@ -1235,7 +1244,7 @@
 				continue;
 			}
 			if (p.offsetWidth >= CONFIG.media.lockWidth) {
-				if (!p.querySelector(SEL.tweetText)) return p;
+				if (!p.querySelector(SEL.tweetText) && !hasContentSibling(p, el)) return p;
 			}
 			p = p.parentElement;
 		}
@@ -1270,6 +1279,7 @@
 			if (te === "primaryColumn" || te === "sidebarColumn") break;
 			if (p.querySelector(SEL.tweetText)) break;
 			if (p.querySelector(SEL.actionBar)) break;
+			if (hasContentSibling(p, host)) break;
 			run.push(p);
 			p = p.parentElement;
 		}
